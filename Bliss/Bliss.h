@@ -90,9 +90,9 @@ namespace Bliss {
 		virtual bool CompEq(const BVarContainer &other) const {
 			return false;
 		}
-		virtual BVar index(size_t index) const;
-		virtual BVar head() const;
-		virtual BVar tail() const;
+		virtual BVar head() const { return Nil; }
+		virtual BVar tail() const { return Nil; }
+		virtual BVar index(size_t index) const { return Nil; }
 	};
 
 
@@ -136,7 +136,9 @@ namespace Bliss {
 			int IntValue() const { return value; }
 			std::string StringValue() const { return std::to_string(value); }
 			std::string StringRepr() const { return StringValue(); }
-			BVarContainer* duplicate() const;
+			BVarContainer *duplicate() const {
+				return new BVarIntContainer(value);
+			}
 			void add(const BVarContainer &other) throw(BInvalidOperationException) {
 				// TODO: type checking
 				if (!other.CanCastInt())
@@ -176,7 +178,9 @@ namespace Bliss {
 			int IntValue() const { return std::stoi(value); }
 			std::string StringValue() const { return value; }
 			std::string StringRepr() const { return "\"" + value + "\""; }
-			BVarContainer* duplicate() const;
+			BVarContainer *duplicate() const {
+				return new BVarStringContainer(value);
+			}
 			void add(const BVarContainer &other) throw(BInvalidOperationException) {
 				// TODO: type checking
 				if (!other.CanCastString())
@@ -188,9 +192,24 @@ namespace Bliss {
 			}
 			bool CanCastInt() const { return true; }
 			bool CanCastString() const { return true; }
-			virtual BVar index(size_t index) const;
-			virtual BVar head() const;
-			virtual BVar tail() const;
+			BVar index(size_t index) const {
+				auto it = value.cbegin() + index;
+				if (it != value.cend())
+					return BVar(std::string(value, index, 1));
+				return Nil;
+			}
+			BVar head() const {
+				auto it = value.cbegin();
+				if (it != value.cend())
+					return BVar(std::string(1, *it));
+				return Nil;
+			}
+			BVar tail() const {
+				auto it = value.crbegin();
+				if (it != value.crend())
+					return BVar(std::string(1, *it));
+				return Nil;
+			}
 		};
 
 		class BVarAtomContainer : public BVarContainer {
@@ -210,7 +229,9 @@ namespace Bliss {
 				return value == other.IntValue();
 			}
 
-			BVarContainer* duplicate() const;
+			BVarContainer *duplicate() const {
+				return new BVarAtomContainer(*this);
+			}
 			bool CanCastInt() const { return false; }
 			bool CanCastString() const { return false; }
 		};
@@ -241,8 +262,24 @@ namespace Bliss {
 			int IntValue() const { return 0; }
 			std::string StringValue() const { return StringMap(); }
 			std::string StringRepr() const { return StringMap(true); }
-			BVarContainer* duplicate() const;
-			bool CompEq(const BVarContainer &other) const;
+			BVarContainer *duplicate() const {
+				return new BVarListContainer(*this);
+			}
+			bool CompEq(const BVarContainer &other) const {
+				if (other.type != BVarType::List)
+					return false;
+				const BVarListContainer *lc = dynamic_cast<const BVarListContainer*>(&other);
+				if (!lc)
+					return false;
+				auto it1 = value.cbegin(), it2 = lc->value.cbegin();
+				for (; 
+					it1 != value.cend() && it2 != lc->value.cend();
+					++it1, ++it2) {
+					if (!it1->CompEq(*it2))
+						return false;
+				}
+				return it1 == value.cend() && it2 == lc->value.cend();
+			}
 			bool CanCastInt() const { return false; }
 			bool CanCastString() const { return false; }
 

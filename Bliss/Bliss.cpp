@@ -69,66 +69,6 @@ namespace Bliss {
 		std::swap(container, other.container);
 		return *this;
 	}
-
-	// BVarContainer
-	BVar BVarContainer::head() const { return Nil; }
-	BVar BVarContainer::tail() const { return Nil; }
-
-	BVar BVarContainer::index(size_t index) const
-	{
-		return Nil;
-	}
-
-	// Subcontainers
-	namespace Containers {
-		BVarContainer *BVarIntContainer::duplicate() const {
-			return new BVarIntContainer(value);
-		}
-		BVarContainer *BVarStringContainer::duplicate() const {
-			return new BVarStringContainer(value);
-		}
-		BVarContainer *BVarAtomContainer::duplicate() const {
-			return new BVarAtomContainer(*this);
-		}
-		BVarContainer *BVarListContainer::duplicate() const {
-			return new BVarListContainer(*this);
-		}
-
-		bool BVarListContainer::CompEq(const BVarContainer &other) const {
-			if (other.type != BVarType::List)
-				return false;
-			const BVarListContainer *lc = dynamic_cast<const BVarListContainer*>(&other);
-			if (!lc)
-				return false;
-			auto it1 = value.cbegin(), it2 = lc->value.cbegin();
-			for (; 
-				it1 != value.cend() && it2 != lc->value.cend();
-				++it1, ++it2) {
-				if (!it1->CompEq(*it2))
-					return false;
-			}
-			return it1 == value.cend() && it2 == lc->value.cend();
-		}
-
-		BVar BVarStringContainer::index(size_t index) const {
-			auto it = value.cbegin() + index;
-			if (it != value.cend())
-				return BVar(std::string(value, index, 1));
-			return Nil;
-		}
-		BVar BVarStringContainer::head() const { 
-			auto it = value.cbegin();
-			if (it != value.cend())
-				return BVar(std::string(1, *it));
-			return Nil;
-		}
-		BVar BVarStringContainer::tail() const {
-			auto it = value.crbegin();
-			if (it != value.crend())
-				return BVar(std::string(1, *it));
-			return Nil;
-		}
-	}
 }
 
 using namespace Bliss;
