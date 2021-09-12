@@ -64,20 +64,11 @@ namespace Bliss {
 	BVar::BVar(BVarContainer *cnt) : container(cnt) { }
 	BVar::BVar(BVarContainer const &cnt) : container(cnt.duplicate()) { }
 	BVar::BVar(BVar const &other) : container(other.container->duplicate()) { }
-	BVar BVar::Atom(std::string name) {
-		return BVar(new BVarAtomContainer(name));
-	}
-	BVar BVar::List() {
-		return BVar(new BVarListContainer());
-	}
-	BVar BVar::List(const BListType &l) {
-		return BVar(new BVarListContainer(l));
-	}
-	BVar BVar::MakeBEnvPtr(BEnvPtr ptr) {
-		return BVar(new BVarEnvironmentContainer(ptr));
-	}
+	BVar BVar::Atom(std::string name) { return BVar(new BVarAtomContainer(name)); }
+	BVar BVar::List() { return BVar(new BVarListContainer()); }
+	BVar BVar::List(const BListType &l) { return BVar(new BVarListContainer(l)); }
+	BVar BVar::MakeBEnvPtr(BEnvPtr ptr) { return BVar(new BVarEnvironmentContainer(ptr)); }
 	BVar::~BVar() { }
-	BVarContainer* BVar::_container() { return container->_container(); }
 	BVarType BVar::Type() const { return container->type; }
 	BAtomType BVar::AtomValue() const { return container->AtomValue(); }
 	BIntType BVar::IntValue() const { return container->IntValue(); }
@@ -87,6 +78,10 @@ namespace Bliss {
 	BVar BVar::Head() const { return container->Head(); }
 	BVar BVar::Tail() const { return container->Tail(); }
 	BVar BVar::Index(size_t Index) const { return container->Index(Index); }
+	BListType::iterator BVar::Begin() { return container->Begin(); }
+	BListType::iterator BVar::End() { return container->End(); }
+	BListType::const_iterator BVar::CBegin() const { return container->CBegin(); }
+	BListType::const_iterator BVar::CEnd() const { return container->CEnd(); }
 	size_t BVar::Length() const { return container->Length(); }
 	BEnvPtr BVar::EnvPtr() { return container->EnvPtr(); }
 	ProcType BVar::ProcValue() const { return container->ProcValue(); }
@@ -174,28 +169,27 @@ namespace Bliss {
 				}
 				return value;
 			} else if (first_atom == builtin_lambda) {
-				return BVar(new BVarLambdaContainer(x.Index(1), x.Index(2)));
+				return BVar(new BVarLambdaContainer(x.Index(1), x.Index(2), env.EnvPtr()));
 			} else if (first_atom == builtin_begin) {
 				// TODO: ugly
-				auto it = rest._container()->CBegin();
-				auto end = rest._container()->CEnd() - 1;
+				auto it = rest.CBegin();
+				auto end = rest.CEnd() - 1;
 				for( ; it != end; ++it)
 					Eval(*it, env);
 				return Eval(*it, env);
 			}
 			// Function call.
 			BListType args;
-			const BVar &fun = x.Head();
-			auto it = rest._container()->CBegin();
-			auto end = rest._container()->CEnd();
+			BVar fun = x.Head();
+			auto it = rest.CBegin();
+			auto end = rest.CEnd();
 			for ( ; it != end; ++it)
 				args.push_back(Eval(*it, env));
 			switch (fun.Type()) {
 			case BVarType::Lambda: {
 				// Create new environment
-				BEnvPtr child_env = std::make_shared<BEnvironment>(env.EnvPtr());
-				// Add arguments to environment
-				BVar fun_args = fun.Head();
+				BEnvPtr child_env = std::make_shared<BEnvironment>(fun.EnvPtr());
+				BVar fun_args = fun.Index(0);
 				if (fun_args.Type() == BVarType::Atom) {
 					// Single argument, not a list. Assign all arguments to this name
 					BListType tmp;
@@ -205,12 +199,14 @@ namespace Bliss {
 					tmp2.push_back(fun_args);
 					fun_args = BVar(tmp2);
 				}
-				for (auto it1 = args.cbegin(), it2 = fun_args._container()->CBegin();
-					it1 != args.cend(), it2 != fun_args._container()->CEnd();
+				// Add arguments to environment
+				for (auto it1 = args.cbegin(), it2 = fun_args.CBegin();
+					it1 != args.cend(), it2 != fun_args.CEnd();
 					++it1, ++it2) {
 					child_env->TryInsert(it2->AtomValue(), *it1);
 				}
-				return Eval(fun.Tail().Head(), BVar::MakeBEnvPtr(child_env));
+				// Evaluate under lambda environment
+				return Eval(fun.Index(1), BVar::MakeBEnvPtr(child_env));
 			} break;
 			case BVarType::Proc:
 				return fun.ProcValue()(args);
@@ -257,6 +253,12 @@ int main()
 	std::cout << "c: " << c << ", repr: " << c.StringRepr() << std::endl;
 	std::cout << "l: " << l << std::endl;
 
+	/* Code:
+	 * (begin
+	 *   (define add (lambda (x y) (+ x y)))
+	 *   (print (add 1 2))
+	 * )
+	 */
 	BListType code;
 	code.push_back(BVar(1));
 	//BVar x(code);
