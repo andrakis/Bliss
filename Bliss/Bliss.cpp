@@ -100,6 +100,14 @@ namespace Bliss {
 		container->subtract(*rhs.container);
 		return *this;
 	} 
+	BVar &BVar::operator*= (const BVar &rhs)& throw(BInvalidOperationException) {
+		container->multiply(*rhs.container);
+		return *this;
+	}
+	BVar &BVar::operator/= (const BVar &rhs)& throw (BInvalidOperationException) {
+		container->divide(*rhs.container);
+		return *this;
+	} 
 	bool BVar::operator== (const BVar &rhs) const { return container->CompEq(*rhs.container); }
 	bool BVar::operator!= (const BVar &rhs) const { return !(operator==(rhs)); }
 	std::ostream &operator<<(std::ostream &os, const BVar &v)
@@ -180,7 +188,7 @@ namespace Bliss {
 			}
 			// Function call.
 			BListType args;
-			BVar fun = x.Head();
+			BVar fun = Eval(first, env);
 			auto it = rest.CBegin();
 			auto end = rest.CEnd();
 			for ( ; it != end; ++it)
@@ -201,9 +209,11 @@ namespace Bliss {
 				}
 				// Add arguments to environment
 				for (auto it1 = args.cbegin(), it2 = fun_args.CBegin();
-					it1 != args.cend(), it2 != fun_args.CEnd();
+					it1 != args.cend() && it2 != fun_args.CEnd();
 					++it1, ++it2) {
-					child_env->TryInsert(it2->AtomValue(), *it1);
+
+					if(!child_env->TryInsert(it2->AtomValue(), *it1))
+						throw new BRuntimeException(std::string("Key already defined: ") + it2->StringValue());
 				}
 				// Evaluate under lambda environment
 				return Eval(fun.Index(1), BVar::MakeBEnvPtr(child_env));
@@ -215,9 +225,55 @@ namespace Bliss {
 			default:
 				break;
 			}
+			throw new BRuntimeException("Invalid type");
 		}
 		throw new BRuntimeException("Invalid type");
 		// todo...
+	}
+
+	namespace StandardLibrary {
+		BVar Print(const BListType &args) {
+			// Map and print
+			for (auto it = args.cbegin(); it != args.cend(); ++it) {
+				if (it != args.cbegin())
+					std::cout << " ";
+				std::cout << it->StringValue();
+			}
+			std::cout << "\n";
+			return Nil;
+		}
+
+		/*BVar Plus(const BListType &args) {
+			if (args.empty()) return BVar(0);
+			BVar value = args.front();
+			for(auto it = args.cbegin() + 1; it != args.cend(); ++it)
+				value += *it;
+			return value;
+		}*/
+
+		namespace internal {
+			template<class Callback>
+			BVar FoldLeft(const BListType &args, Callback callback) {
+				if (args.empty()) return BVar(0);
+				BVar value = args.front();
+				for(auto it = args.cbegin() + 1; it != args.cend(); ++it)
+					callback(value, *it);
+				return value;
+			}
+		}
+
+		BVar Plus(const BListType &args) {
+			return internal::FoldLeft(args, [](BVar &value, const BVar &x) { value += x; });
+		}
+		BVar Minus(const BListType &args) {
+			return internal::FoldLeft(args, [](BVar &value, const BVar &x) { value -= x; });
+		}
+		BVar Multiply(const BListType &args) {
+			return internal::FoldLeft(args, [](BVar &value, const BVar &x) { value *= x; });
+		}
+		BVar Divide(const BListType &args) {
+			return internal::FoldLeft(args, [](BVar &value, const BVar &x) { value /= x; });
+		}
 	}
 }
 
@@ -233,12 +289,12 @@ int main()
 	BVar a(0), b("1"), c = BVar::Atom("test"), d = BVar::Atom("test");
 	BVar l = BVar::List();
 
-	std::cout << "a: " << a << std::endl; a += 1;
-	std::cout << "a: " << a << std::endl; a += 1;
-	std::cout << "b: " << b << std::endl; b += 1;
-	std::cout << "b: " << b << std::endl; b += 1;
-	std::cout << "c: " << c << ", repr: " << c.StringRepr() << std::endl;
-	std::cout << "l: " << l << std::endl;
+	std::cout << "a: " << a << "\n"; a += 1;
+	std::cout << "a: " << a << "\n"; a += 1;
+	std::cout << "b: " << b << "\n"; b += 1;
+	std::cout << "b: " << b << "\n"; b += 1;
+	std::cout << "c: " << c << ", repr: " << c.StringRepr() << "\n";
+	std::cout << "l: " << l << "\n";
 
 	BVar tmp(a);
 	a = b;
@@ -248,10 +304,10 @@ int main()
 	l += b;
 	l += c;
 	
-	std::cout << "a: " << a << std::endl; 
-	std::cout << "b: " << b << std::endl; 
-	std::cout << "c: " << c << ", repr: " << c.StringRepr() << std::endl;
-	std::cout << "l: " << l << std::endl;
+	std::cout << "a: " << a << "\n"; 
+	std::cout << "b: " << b << "\n"; 
+	std::cout << "c: " << c << ", repr: " << c.StringRepr() << "\n";
+	std::cout << "l: " << l << "\n";
 
 	/* Code:
 	 * (begin
@@ -259,15 +315,31 @@ int main()
 	 *   (print (add 1 2))
 	 * )
 	 */
-	BListType code;
-	code.push_back(BVar(1));
-	//BVar x(code);
+	BListType code({
+		BListType({BVar::Atom("begin"),
+			BListType({BVar::Atom("define"),
+				BVar::Atom("add"),
+				BListType({BVar::Atom("lambda"),
+					BListType({BVar::Atom("x"), BVar::Atom("y")}),
+					BListType({BVar::Atom("+"), BVar::Atom("x"), BVar::Atom("y")})
+				})
+			}),
+			BListType({BVar::Atom("print"), BListType({BVar::Atom("add"), 1, 2})})
+		})
+	});
 	BVar x = BVar::Atom("x");
-	BEnvPtr _env = std::make_shared<BEnvironment>();
-	BVar env = BVar::MakeBEnvPtr(BEnvPtr(_env));
-	_env->TryInsert(AtomLibrary.declare("x"), BVar("test"));
-	std::cout << "Code: " << x << std::endl;
-	std::cout << "Result: " << Eval(x, env) << std::endl;
+	
+	BEnvPtr env = std::make_shared<BEnvironment>();
+	env->TryInsert(AtomLibrary.declare("print"), BVar(StandardLibrary::Print));
+	env->TryInsert(AtomLibrary.declare("+"), BVar(StandardLibrary::Plus));
+
+	BVar _env = BVar::MakeBEnvPtr(BEnvPtr(env));
+	env->TryInsert(AtomLibrary.declare("x"), BVar("test"));
+	std::cout << "Code: " << x << "\n";
+	std::cout << "Result: " << Eval(x, _env) << "\n";
+
+	std::cout << "Code: " << code << "\n";
+	std::cout << "Result: " << Eval(code, _env) << "\n";
 
 	return 0;
 }

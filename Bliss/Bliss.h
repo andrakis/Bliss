@@ -115,6 +115,8 @@ namespace Bliss {
 		void assign(const BVar &other);
 		BVar &operator+= (const BVar &rhs)& throw(BInvalidOperationException);
 		BVar &operator-= (const BVar &rhs)& throw (BInvalidOperationException);
+		BVar &operator*= (const BVar &rhs)& throw (BInvalidOperationException);
+		BVar &operator/= (const BVar &rhs)& throw(BInvalidOperationException);
 		bool operator== (const BVar &rhs) const;
 		bool operator!= (const BVar &rhs) const;
 		BVar &operator=(const BVar &&other) noexcept;
