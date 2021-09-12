@@ -5,24 +5,57 @@
 
 #include <deque>
 #include <exception>
+#include <functional>
 #include <map>
+#include <memory>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #define Str(X) ((X)->StringValue())
 #define Repr(X) ((X)->StringRepr())
 
 namespace Bliss {
-	class BVar;
-	extern BVar True, False, Nil;
-	bool Init();
-
 	enum class BVarType {
 		Integer,
 		String,
 		Atom,
-		List
+		List,
+		Lambda,
+		Environment,
+		Proc,
+		ProcWithEnvironment
 	};
+	typedef size_t BAtomType;
+	typedef int BIntType;
+
+	class BVar;
+	class BVarContainer;
+	class BEnvironment;
+
+	extern BVar True, False, Nil;
+
+	typedef typename std::shared_ptr<BEnvironment> BEnvPtr;
+	typedef typename std::map<BAtomType,BVar> BEnvMapType;
+
+	class BEnvironment {
+	public:
+		BEnvironment() : parent(nullptr) { }
+		BEnvironment(BEnvPtr Parent) : parent(Parent) { }
+		bool TryFind(BAtomType name, /* out */ BVar &result);
+		bool TryInsert(BAtomType name, const BVar &value);
+		bool TrySet(BAtomType name, const BVar &value);
+	private:
+		BEnvMapType map;
+	public:
+		BEnvPtr parent;
+	};
+
+	typedef typename std::deque<BVar> BListType;
+	typedef std::function<BVar(const BListType &)> ProcType;
+	typedef std::function<BVar(const BListType &, BEnvPtr)> ProcWithEnvironmentType;
+
+	bool Init();
 
 	struct BInvalidOperationException : public std::exception {
 		BInvalidOperationException() : message("Invalid operation") { }
@@ -34,44 +67,75 @@ namespace Bliss {
 		std::string message;
 	};
 
-	class BVarContainer;
-	typedef typename std::deque<BVar> ListType;
+	struct BRuntimeException : public std::exception {
+		BRuntimeException() : message("Invalid operation") { }
+		BRuntimeException(std::string msg) : message(msg) { }
+		const char *what() const throw() {
+			return message.c_str();
+		}
+	private:
+		std::string message;
+	};
+
 	class BVar {
-		BVarContainer* container;
+		std::unique_ptr<BVarContainer> container;
 	public:
+		BVar() : BVar(0) { }
 		BVar(int value);
 		BVar(std::string value);
+		BVar(const BListType &list);
+		BVar(ProcType proc);
+		BVar(ProcWithEnvironmentType proc);
+		//BVar(BEnvPtr env);
 		BVar(BVarContainer *cnt);
 		BVar(BVarContainer const &cnt);
 		BVar(BVar const &other);
 		static BVar Atom(std::string name);
 		static BVar List();
-		static BVar List(const ListType &l);
+		static BVar List(const BListType &l);
+		static BVar MakeBEnvPtr(BEnvPtr ptr);
 		~BVar();
-		int IntValue() const;
+		BVarContainer *_container();
+		BVarType Type() const;
+		BAtomType AtomValue() const;
+		BIntType IntValue() const;
 		std::string StringValue() const;
 		std::string StringRepr() const;
+		BVar Head() const;
+		BVar Tail() const;
+		BVar Index(size_t Index) const;
+		size_t Length() const;
+		BEnvPtr EnvPtr();
+		ProcType ProcValue() const;
+		ProcWithEnvironmentType ProcWithEnvironmentValue() const;
 		bool CompEq (const BVar &other) const;
 		void assign(BVarContainer* cnt);
+		void assign(const BVar &other);
 		BVar &operator+= (const BVar &rhs)& throw(BInvalidOperationException);
 		BVar &operator-= (const BVar &rhs)& throw (BInvalidOperationException);
-		bool operator== (const BVar &rhs);
-		bool operator!= (const BVar &rhs);
+		bool operator== (const BVar &rhs) const;
+		bool operator!= (const BVar &rhs) const;
 		BVar &operator=(const BVar &&other) noexcept;
 		BVar &operator=(BVar &other) noexcept;
 	};
 
 	std::ostream &operator<<(std::ostream &os, const BVar &v);
 
+	namespace internal {
+		extern BListType emptyList;
+	}
+
 	class BVarContainer {
 	protected:
 		BVarContainer(BVarType t) : type(t) { }
 	public:
 		const BVarType type;
+		BVarContainer *_container() { return this; }
 		virtual ~BVarContainer() { }
 		virtual bool CanCastInt() const = 0;
 		virtual bool CanCastString() const = 0;
-		virtual int IntValue() const = 0;
+		virtual BAtomType AtomValue() const { return 0; }
+		virtual BIntType IntValue() const = 0;
 		virtual std::string StringValue() const = 0;
 		virtual std::string StringRepr() const = 0;
 		virtual BVarContainer *duplicate() const = 0;
@@ -90,23 +154,38 @@ namespace Bliss {
 		virtual bool CompEq(const BVarContainer &other) const {
 			return false;
 		}
-		virtual BVar head() const { return Nil; }
-		virtual BVar tail() const { return Nil; }
-		virtual BVar index(size_t index) const { return Nil; }
-	};
+		virtual BVar Head() const { return Nil; }
+		virtual BVar Tail() const { return Nil; }
+		virtual BVar Index(size_t Index) const { return Nil; }
+		virtual size_t Length() const { return 0; }
+		virtual BListType::iterator Begin () { return internal::emptyList.begin(); }
+		virtual BListType::iterator End () { return internal::emptyList.end(); }
+		virtual BListType::const_iterator CBegin () const { return internal::emptyList.cbegin(); }
+		virtual BListType::const_iterator CEnd () const { return internal::emptyList.cend(); }
 
+		virtual BEnvPtr EnvPtr() { return nullptr; }
+		virtual ProcType ProcValue() const { return NotAProc; }
+		virtual ProcWithEnvironmentType ProcWithEnvironmentValue() const { return NotAProcWithEnvironment; }
+	private:
+		static BVar NotAProc(const BListType &args) {
+			return Nil;
+		}
+		static BVar NotAProcWithEnvironment(const BListType &args, BEnvPtr env) {
+			return Nil;
+		}
+	};
 
 	class BVarAtomLibrary {
 	public:
-		typedef std::map<int,std::string> AtomById;
-		typedef std::map<std::string,int> AtomByName;
+		typedef std::map<BAtomType,std::string> AtomById;
+		typedef std::map<std::string,BAtomType> AtomByName;
 
 	protected:
 		AtomById ById;
 		AtomByName ByName;
-		int AtomCounter = 0;
+		BAtomType AtomCounter = 0;
 	public:
-		int declare(std::string name) {
+		BAtomType declare(std::string name) {
 			AtomByName::iterator it = ByName.find(name);
 			if (it == ByName.cend()) {
 				auto itIn = ByName.emplace(name, AtomCounter);
@@ -115,12 +194,14 @@ namespace Bliss {
 			}
 			return it->second;
 		}
-		std::string find(int id) {
+		std::string find(BAtomType id) const {
 			auto it = ById.find(id);
 			return it->second;
 		}
-		int find(std::string name) {
+		BAtomType find(std::string name) {
 			auto it = ByName.find(name);
+			if (it == ByName.end())
+				return declare(name);
 			return it->second;
 		}
 	};
@@ -132,8 +213,8 @@ namespace Bliss {
 		protected:
 			int value;
 		public:
-			BVarIntContainer(int v) : BVarContainer(BVarType::Integer), value(v) { }
-			int IntValue() const { return value; }
+			BVarIntContainer(BIntType v) : BVarContainer(BVarType::Integer), value(v) { }
+			BIntType IntValue() const { return value; }
 			std::string StringValue() const { return std::to_string(value); }
 			std::string StringRepr() const { return StringValue(); }
 			BVarContainer *duplicate() const {
@@ -175,7 +256,7 @@ namespace Bliss {
 			std::string value;
 		public:
 			BVarStringContainer(std::string v) : BVarContainer(BVarType::String), value(v) { }
-			int IntValue() const { return std::stoi(value); }
+			BIntType IntValue() const { return std::stoi(value); }
 			std::string StringValue() const { return value; }
 			std::string StringRepr() const { return "\"" + value + "\""; }
 			BVarContainer *duplicate() const {
@@ -192,37 +273,38 @@ namespace Bliss {
 			}
 			bool CanCastInt() const { return true; }
 			bool CanCastString() const { return true; }
-			BVar index(size_t index) const {
-				auto it = value.cbegin() + index;
+			BVar Index(size_t Index) const {
+				auto it = value.cbegin() + Index;
 				if (it != value.cend())
-					return BVar(std::string(value, index, 1));
+					return BVar(std::string(value, Index, 1));
 				return Nil;
 			}
-			BVar head() const {
+			BVar Head() const {
 				auto it = value.cbegin();
 				if (it != value.cend())
 					return BVar(std::string(1, *it));
 				return Nil;
 			}
-			BVar tail() const {
+			BVar Tail() const {
 				auto it = value.crbegin();
 				if (it != value.crend())
 					return BVar(std::string(1, *it));
 				return Nil;
 			}
+			size_t Length() const { return value.length(); }
 		};
 
 		class BVarAtomContainer : public BVarContainer {
-			std::string name;
-			int value;
+			BAtomType value;
 		public:
 			BVarAtomContainer(std::string n) : BVarContainer(BVarType::Atom),
-				value(AtomLibrary.declare(n)), name(n) { }
+				value(AtomLibrary.declare(n)) { }
 			BVarAtomContainer(const BVarAtomContainer &other) : BVarContainer(BVarType::Atom),
-				value(other.value), name(other.name) { }
-			int IntValue() const { return value; }
-			std::string StringValue() const { return name; }
-			std::string StringRepr() const { return "'" + name; }
+				value(other.value) { }
+			BAtomType AtomValue() const { return value; }
+			BIntType IntValue() const { return 0; }
+			std::string StringValue() const { return "'" + AtomLibrary.find(value); }
+			std::string StringRepr() const { return StringValue(); }
 			bool CompEq(const BVarContainer &other) const {
 				if (other.type != BVarType::Atom)
 					return false;
@@ -233,15 +315,15 @@ namespace Bliss {
 				return new BVarAtomContainer(*this);
 			}
 			bool CanCastInt() const { return false; }
-			bool CanCastString() const { return false; }
+			bool CanCastString() const { return true; }
 		};
 
 		class BVarListContainer : public BVarContainer {
 		public:
-			typedef typename ListType::iterator iterator;
-			typedef typename ListType::const_iterator const_iterator;
+			typedef typename BListType::iterator iterator;
+			typedef typename BListType::const_iterator const_iterator;
 		private:
-			ListType value;
+			BListType value;
 			std::string StringMap(bool repr = false) const {
 				std::string result = "(";
 				for(auto it = value.cbegin(); it != value.cend(); ++it) {
@@ -254,12 +336,21 @@ namespace Bliss {
 			}
 		public:
 			BVarListContainer() : BVarContainer(BVarType::List), value() { }
-			BVarListContainer(ListType l) : BVarContainer(BVarType::List), value(l) { }
+			BVarListContainer(const BVarListContainer &other) : BVarContainer(BVarType::List), value(other.value) { }
+			BVarListContainer(BListType l) : BVarContainer(BVarType::List), value(l) { }
+			template<typename iterator_type>
+			BVarListContainer(iterator_type begin, iterator_type end) : BVarContainer(BVarType::List),
+				value(begin, end) { }
 			void add(const BVarContainer &other) throw(BInvalidOperationException) {
 				value.push_back(BVar(other.duplicate()));
 			}
 
-			int IntValue() const { return 0; }
+			// Internal function
+			void _push_back(const BVar &ele) {
+				value.push_back(ele);
+			}
+
+			BIntType IntValue() const { return 0; }
 			std::string StringValue() const { return StringMap(); }
 			std::string StringRepr() const { return StringMap(true); }
 			BVarContainer *duplicate() const {
@@ -283,24 +374,92 @@ namespace Bliss {
 			bool CanCastInt() const { return false; }
 			bool CanCastString() const { return false; }
 
-			BVar index(size_t index) const {
-				auto it = value.cbegin() + index;
+			BVar Index(size_t Index) const {
+				auto it = value.cbegin() + Index;
 				if (it != value.cend())
 					return *it;
 				return Nil;
 			}
-			BVar head() const { 
+			BVar Head() const { 
 				auto it = value.cbegin();
 				if (it != value.cend())
 					return *it;
 				return Nil;
 			}
-			BVar tail() const {
-				auto it = value.crbegin();
-				if (it != value.crend())
-					return *it;
-				return Nil;
+			BVar Tail() const {
+				return BVar(new BVarListContainer(value.cbegin() + 1, value.cend()));
 			}
+			size_t Length() const { return value.size(); }
+			BListType::iterator Begin () { return value.begin(); }
+			BListType::iterator End () { return value.end(); }
+			BListType::const_iterator CBegin () const { return value.cbegin(); }
+			BListType::const_iterator CEnd () const { return value.cend(); }
+		};
+
+		class BVarLambdaContainer : public BVarContainer {
+			BVar args;
+			BVar body;
+		public:
+			BVarLambdaContainer(const BVarLambdaContainer &other) : BVarContainer(BVarType::Lambda), args(other.args), body(other.body) { }
+			BVarLambdaContainer(const BVar &_args, const BVar &_body) : BVarContainer(BVarType::Lambda), args(_args), body(_body) { }
+			BVar Head() const { return args; }
+			BVar Tail() const {
+				BVarListContainer *cont = new BVarListContainer();
+				cont->_push_back(body);
+				return BVar(cont);
+			}
+			BAtomType AtomValue() const { return 0; }
+			BIntType IntValue() const { return 0; }
+			std::string StringValue() const { return "#Lambda"; /* TODO */ }
+			std::string StringRepr() const { return StringValue(); }
+			BVarContainer *duplicate() const { return new BVarLambdaContainer(*this); }
+			bool CanCastInt() const { return false; }
+			bool CanCastString() const { return true; }
+		};
+
+		class BVarProcContainer : public BVarContainer {
+			ProcType proc;
+		public:
+			BVarProcContainer(const BVarProcContainer &other) : BVarContainer(BVarType::Proc), proc(other.proc) { }
+			BVarProcContainer(ProcType _proc) : BVarContainer(BVarType::Proc), proc(_proc) { }
+			BAtomType AtomValue() const { return 0; }
+			BIntType IntValue() const { return 0; }
+			std::string StringValue() const { return "#Proc"; /* TODO */ }
+			std::string StringRepr() const { return StringValue(); }
+			BVarContainer *duplicate() const { return new BVarProcContainer(*this); }
+			bool CanCastInt() const { return false; }
+			bool CanCastString() const { return false; }
+			ProcType ProcValue() const { return proc; }
+		};
+
+		class BVarProcWithEnvironmentContainer : public BVarContainer {
+			ProcWithEnvironmentType proc;
+		public:
+			BVarProcWithEnvironmentContainer(const BVarProcWithEnvironmentContainer &other) : BVarContainer(BVarType::ProcWithEnvironment), proc(other.proc) { }
+			BVarProcWithEnvironmentContainer(ProcWithEnvironmentType _proc) : BVarContainer(BVarType::ProcWithEnvironment), proc(_proc) { }
+			BAtomType AtomValue() const { return 0; }
+			BIntType IntValue() const { return 0; }
+			std::string StringValue() const { return "#ProcWithEnvironment"; /* TODO */ }
+			std::string StringRepr() const { return StringValue(); }
+			BVarContainer *duplicate() const { return new BVarProcWithEnvironmentContainer(*this); }
+			bool CanCastInt() const { return false; }
+			bool CanCastString() const { return false; }
+			ProcWithEnvironmentType ProcWithEnvironmentValue() const { return proc; }
+		};
+
+		class BVarEnvironmentContainer : public BVarContainer {
+			BEnvPtr env;
+		public:
+			BVarEnvironmentContainer(const BVarEnvironmentContainer &other) : BVarContainer(BVarType::Environment), env(other.env) { }
+			BVarEnvironmentContainer(BEnvPtr _env) : BVarContainer(BVarType::Environment), env(_env) { }
+			BAtomType AtomValue() const { return 0; }
+			BIntType IntValue() const { return 0; }
+			std::string StringValue() const { return "#Env"; /* TODO */ }
+			std::string StringRepr() const { return StringValue(); }
+			BVarContainer *duplicate() const { return new BVarEnvironmentContainer(*this); }
+			bool CanCastInt() const { return false; }
+			bool CanCastString() const { return false; }
+			BEnvPtr EnvPtr() { return env; }
 		};
 	}
 }
