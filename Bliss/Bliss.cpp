@@ -34,7 +34,7 @@ namespace Bliss {
 	bool BEnvironment::TryFind(BAtomType name, /* out */ BVar &result) {
 		auto it = map.find(name);
 		if (it != map.end()) {
-			result = it->second;
+			result.assign(it->second);
 			return true;
 		}
 		if (parent)
