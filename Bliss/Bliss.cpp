@@ -451,6 +451,8 @@ int main()
 		}
 	}
 
+	// Cleanup
+	env->Clear();
 
 	return 0;
 }

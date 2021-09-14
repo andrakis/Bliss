@@ -45,6 +45,7 @@ namespace Bliss {
 		bool TryFind(BAtomType name, /* out */ BVar &result);
 		bool TryInsert(BAtomType name, const BVar &value);
 		bool TrySet(BAtomType name, const BVar &value);
+		void Clear() { map.clear(); }
 	private:
 		BEnvMapType map;
 	public:
