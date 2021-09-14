@@ -28,7 +28,7 @@ namespace Bliss {
 // BVar
 namespace Bliss {
 	using namespace Containers;
-	bool Debug = true;
+	bool Debug = false;
 
 	// Environment
 	bool BEnvironment::TryFind(BAtomType name, /* out */ BVar &result) {
@@ -150,132 +150,139 @@ namespace Bliss {
 	}
 
 	// Eval
-	BVar Eval(const BVar &x, BVar env) throw(BRuntimeException) {
+	BVar Eval(const BVar &_x, BVar _env) throw(BRuntimeException) {
 		using namespace internal;
-		EvalDepth++;
-		const BVarType type = x.Type();
-		if (Debug) std::cerr << DepthStr() << "Eval(" << x << ")" << debug_endstr;
-		if (type == BVarType::Atom)
-		{
-			BEnvPtr in_env = env.EnvPtr();
-			BVar out(0);
-			if (in_env->TryFind(x.AtomValue(), out)) {
-				if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << out << debug_endstr;
-				EvalDepth--;
-				return out;
-			}
-			throw BRuntimeException(std::string("Key not found: ") + x.StringValue());
-		} else if(type != BVarType::List) {
-			if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << x << debug_endstr;
-			EvalDepth--;
-			return x;
-		}
-		if (x.Length() == 0) {
-			if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => Nil" << debug_endstr;
-			EvalDepth--;
-			return Nil;
-		}
-		// List, invoke builtin or function call
-		const BVar &first = x.Head();
-		// Could be const if we could get iterators into BVar
-		BVar rest = x.Tail();
-		if (first.Type() == BVarType::Atom) {
-			const BAtomType first_atom = first.AtomValue();
-			if (first_atom == builtin_if) {
-				// TODO: length checks
-				const BVar &cond = Eval(x.Index(1), env);
-				const BVar &condeq = x.Index(2);
-				BVar alt = Nil;
-				if (x.Length() > 3)
-					alt = x.Index(3);
-				const BVar result = Eval(cond == False ? condeq : alt, env);
-				if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << result << debug_endstr;
-				EvalDepth--;
-				return result;
-			} else if (first_atom == builtin_define) {
+		BVar x = _x, env = _env;
+
+		for( ;; ) {
+			EvalDepth++;
+			const BVarType type = x.Type();
+			if (Debug) std::cerr << DepthStr() << "Eval(" << x << ")" << debug_endstr;
+			if (type == BVarType::Atom)
+			{
 				BEnvPtr in_env = env.EnvPtr();
-				const BVar &name = rest.Head();
-				const BVar &value = Eval(rest.Tail().Head(), env);
-				if (!in_env->TryInsert(name.AtomValue(), value)) {
-					throw BRuntimeException(std::string("Key already defined: ") + name.StringValue());
+				BVar out(0);
+				if (in_env->TryFind(x.AtomValue(), out)) {
+					if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << out << debug_endstr;
+					EvalDepth--;
+					return out;
 				}
-				if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << value << debug_endstr;
+				throw BRuntimeException(std::string("Key not found: ") + x.StringValue());
+			} else if(type != BVarType::List) {
+				if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << x << debug_endstr;
 				EvalDepth--;
-				return value;
-			} else if (first_atom == builtin_set) {
-				///
-				BEnvPtr in_env = env.EnvPtr();
-				const BVar &name = rest.Head();
-				const BVar &value = Eval(rest.Tail().Head(), env);
-				if (!in_env->TrySet(name.AtomValue(), value)) {
-					throw BRuntimeException(std::string("Key not defined: ") + name.StringValue());
+				return x;
+			}
+			if (x.Length() == 0) {
+				if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => Nil" << debug_endstr;
+				EvalDepth--;
+				return Nil;
+			}
+			// List, invoke builtin or function call
+			const BVar &first = x.Head();
+			// Could be const if we could get iterators into BVar
+			BVar rest = x.Tail();
+			if (first.Type() == BVarType::Atom) {
+				const BAtomType first_atom = first.AtomValue();
+				if (first_atom == builtin_if) {
+					// TODO: length checks
+					const BVar &cond = Eval(x.Index(1), env);
+					const BVar &condeq = x.Index(2);
+					BVar alt = Nil;
+					if (x.Length() > 3)
+						alt = x.Index(3);
+					x = BVar(cond == False ? condeq : alt);
+					// Tail recurse
+					if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << x << debug_endstr;
+					EvalDepth--;
+					continue;
+				} else if (first_atom == builtin_define) {
+					BEnvPtr in_env = env.EnvPtr();
+					const BVar &name = rest.Head();
+					const BVar &value = Eval(rest.Tail().Head(), env);
+					if (!in_env->TryInsert(name.AtomValue(), value)) {
+						throw BRuntimeException(std::string("Key already defined: ") + name.StringValue());
+					}
+					if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << value << debug_endstr;
+					EvalDepth--;
+					return value;
+				} else if (first_atom == builtin_set) {
+					BEnvPtr in_env = env.EnvPtr();
+					const BVar &name = rest.Head();
+					const BVar &value = Eval(rest.Tail().Head(), env);
+					if (!in_env->TrySet(name.AtomValue(), value)) {
+						throw BRuntimeException(std::string("Key not defined: ") + name.StringValue());
+					}
+					if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << value << debug_endstr;
+					EvalDepth--;
+					return value;
+				} else if (first_atom == builtin_lambda) {
+					const BVar &result = BVar(new BVarLambdaContainer(x.Index(1), x.Index(2), env.EnvPtr()));
+					if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << result << debug_endstr;
+					EvalDepth--;
+					return result;
+				} else if (first_atom == builtin_begin) {
+					auto it = rest.CBegin();
+					auto end = rest.CEnd() - 1;
+					for( ; it != end; ++it)
+						Eval(*it, env);
+					// Tail recurse
+					x = BVar(*it);
+					if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << x << debug_endstr;
+					EvalDepth--;
+					continue;
 				}
-				if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << value << debug_endstr;
+			}
+			// Function call.
+			BListType args;
+			BVar fun = Eval(first, env);
+			auto it = rest.CBegin();
+			auto end = rest.CEnd();
+			for ( ; it != end; ++it)
+				args.push_back(Eval(*it, env));
+			const auto tfun = fun.Type();
+			if (tfun == BVarType::Lambda) {
+				// Create new environment
+				BEnvPtr child_env = std::make_shared<BEnvironment>(fun.EnvPtr());
+				BVar fun_args = fun.Index(0);
+				if (fun_args.Type() == BVarType::Atom) {
+					// Single argument, not a list. Assign all arguments to this name
+					BListType tmp;
+					tmp.push_back(BVar(args));
+					args = BListType(tmp);
+					BListType tmp2;
+					tmp2.push_back(fun_args);
+					fun_args = BVar(tmp2);
+				}
+				// Add arguments to environment
+				for (auto it1 = args.cbegin(), it2 = fun_args.CBegin();
+					it1 != args.cend() && it2 != fun_args.CEnd();
+					++it1, ++it2) {
+					child_env->TryInsert(it2->AtomValue(), *it1);
+				}
+				// Evaluate under lambda environment
+				// Tail recurse
+				x = fun.Index(1);
+				env = BVar::MakeBEnvPtr(child_env);
+				if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << x << debug_endstr;
 				EvalDepth--;
-				return value;
-			} else if (first_atom == builtin_lambda) {
-				const BVar &result = BVar(new BVarLambdaContainer(x.Index(1), x.Index(2), env.EnvPtr()));
+				continue;
+			} else if (tfun == BVarType::Proc) {
+				const auto result = fun.ProcValue()(args);
 				if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << result << debug_endstr;
 				EvalDepth--;
 				return result;
-			} else if (first_atom == builtin_begin) {
-				auto it = rest.CBegin();
-				auto end = rest.CEnd() - 1;
-				for( ; it != end; ++it)
-					Eval(*it, env);
-				const BVar &result = Eval(*it, env);
+			} else if (tfun == BVarType::ProcWithEnvironment) {
+				const auto result = fun.ProcWithEnvironmentValue()(args, env.EnvPtr());
 				if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << result << debug_endstr;
 				EvalDepth--;
 				return result;
+			} else {
+				std::cerr << "Invoke attempted on something not a function\n" <<
+							 "  Type: " << (int)fun.Type() << std::endl <<
+							 "  Repr: " << fun.StringRepr() << std::endl;
+				throw BRuntimeException("Invalid type (A)");
 			}
-		}
-		// Function call.
-		BListType args;
-		BVar fun = Eval(first, env);
-		auto it = rest.CBegin();
-		auto end = rest.CEnd();
-		for ( ; it != end; ++it)
-			args.push_back(Eval(*it, env));
-		const auto tfun = fun.Type();
-		if (tfun == BVarType::Lambda) {
-			// Create new environment
-			BEnvPtr child_env = std::make_shared<BEnvironment>(fun.EnvPtr());
-			BVar fun_args = fun.Index(0);
-			if (fun_args.Type() == BVarType::Atom) {
-				// Single argument, not a list. Assign all arguments to this name
-				BListType tmp;
-				tmp.push_back(BVar(args));
-				args = BListType(tmp);
-				BListType tmp2;
-				tmp2.push_back(fun_args);
-				fun_args = BVar(tmp2);
-			}
-			// Add arguments to environment
-			for (auto it1 = args.cbegin(), it2 = fun_args.CBegin();
-				it1 != args.cend() && it2 != fun_args.CEnd();
-				++it1, ++it2) {
-				child_env->TryInsert(it2->AtomValue(), *it1);
-			}
-			// Evaluate under lambda environment
-			const BVar result = Eval(fun.Index(1), BVar::MakeBEnvPtr(child_env));
-			if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << result << debug_endstr;
-			EvalDepth--;
-			return result;
-		} else if (tfun == BVarType::Proc) {
-			const auto result = fun.ProcValue()(args);
-			if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << result << debug_endstr;
-			EvalDepth--;
-			return result;
-		} else if (tfun == BVarType::ProcWithEnvironment) {
-			const auto result = fun.ProcWithEnvironmentValue()(args, env.EnvPtr());
-			if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << result << debug_endstr;
-			EvalDepth--;
-			return result;
-		} else {
-			std::cerr << "Invoke attempted on something not a function\n" <<
-						 "  Type: " << (int)fun.Type() << std::endl <<
-						 "  Repr: " << fun.StringRepr() << std::endl;
-			throw BRuntimeException("Invalid type (A)");
 		}
 	}
 
@@ -332,11 +339,12 @@ enum TestFlags {
 	EnvTest = 1 << 3,
 	AddTest = 1 << 4,
 	FacTest = 1 << 5,
+	RecursiveTest = 1 << 6,
 };
 
 int main()
 {
-	TestFlags tf = FacTest;
+	TestFlags tf = RecursiveTest;
 
 	if (Bliss::Init()) {
 		printf("Init failed?\n");
@@ -441,6 +449,48 @@ int main()
 		BListType({BVar::Atom("print"), BListType({BVar::Atom("fac"), BVar(4)})})
 	});
 	if (tf & FacTest) {
+		std::cout << "Code: " << code << "\n";
+		try {
+			std::cout << "Result: " << Eval(code, _env) << "\n";
+		} catch (BRuntimeException &bre) {
+			std::cerr << "Exception: " << bre.what() << "\n";
+		} catch (...) {
+			std::cerr << "Exception caught.\n";
+		}
+	}
+
+	/*
+	 * Code:
+	 * (begin
+	 *    (define fac_tr (lambda (n a) (if (== n 1) a (fac_tr (- n 1) (* n a)))))
+	 *    (define fac (lambda (n) (fac_tr n 1)))
+	 *    (print (fac 10))
+	 * )
+	 */
+	code = BListType({
+		BVar::Atom("begin"),
+		BListType({BVar::Atom("define"), BVar::Atom("fac_tr2"),
+			BListType({BVar::Atom("lambda"),
+				BListType({BVar::Atom("n"), BVar::Atom("a")}),
+				BListType({BVar::Atom("if"),
+					BListType({BVar::Atom("=="), BVar::Atom("n"), BVar(1)}),
+					BVar::Atom("a"),
+					BListType({BVar::Atom("fac_tr2"),
+						BListType({BVar::Atom("-"), BVar::Atom("n"), BVar(1)}),
+						BListType({BVar::Atom("*"), BVar::Atom("n"), BVar::Atom("a")})
+					})
+				})
+			})
+		}),
+		BListType({BVar::Atom("define"), BVar::Atom("fac_tr"),
+			BListType({BVar::Atom("lambda"),
+				BListType({BVar::Atom("n")}),
+				BListType({BVar::Atom("fac_tr2"), BVar::Atom("n"), BVar(1)})
+			})
+		}),
+		BListType({BVar::Atom("print"), BListType({BVar::Atom("fac_tr"), BVar(10)})})
+	});
+	if (tf & RecursiveTest) {
 		std::cout << "Code: " << code << "\n";
 		try {
 			std::cout << "Result: " << Eval(code, _env) << "\n";
