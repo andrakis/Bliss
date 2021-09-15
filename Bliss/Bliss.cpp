@@ -150,9 +150,8 @@ namespace Bliss {
 	}
 
 	// Eval
-	BVar Eval(const BVar &_x, BVar _env) throw(BRuntimeException) {
+	BVar Eval(BVar x, BVar env) throw(BRuntimeException) {
 		using namespace internal;
-		BVar x = _x, env = _env;
 
 		for( ;; ) {
 			EvalDepth++;
@@ -191,7 +190,7 @@ namespace Bliss {
 					BVar alt = Nil;
 					if (x.Length() > 3)
 						alt = x.Index(3);
-					x = BVar(cond == False ? condeq : alt);
+					x = BVar(cond == False ? alt : condeq);
 					// Tail recurse
 					if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << x << debug_endstr;
 					EvalDepth--;

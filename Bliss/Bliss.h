@@ -311,7 +311,7 @@ namespace Bliss {
 			bool CompEq(const BVarContainer &other) const {
 				if (other.type != BVarType::Atom)
 					return false;
-				return value == other.IntValue();
+				return value == other.AtomValue();
 			}
 
 			BVarContainer *duplicate() const {
