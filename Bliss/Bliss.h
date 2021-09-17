@@ -9,11 +9,19 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <sstream>
 #include <tuple>
 #include <vector>
 
 #define Str(X) ((X)->StringValue())
 #define Repr(X) ((X)->StringRepr())
+
+// Because VC++ complains about ignoring throw(...) sections
+#if _MSC_VER
+#define THROWS(x) throw(...)
+#else
+#define THROWS(x) throw()
+#endif
 
 namespace Bliss {
 	enum class BVarType {
@@ -58,24 +66,27 @@ namespace Bliss {
 
 	bool Init();
 
-	struct BInvalidOperationException : public std::exception {
-		BInvalidOperationException() : message("Invalid operation") { }
-		BInvalidOperationException(std::string msg) : message(msg) { }
-		const char *what() const throw() {
-			return message.c_str();
-		}
-	private:
-		std::string message;
+	class BRuntimeException : public std::exception {
+	public:
+	#if _MSC_VER
+		BRuntimeException(std::string message) : std::exception(message.c_str()) { }
+	#else
+		std::string msg;
+		BRuntimeException(std::string message) : msg(message) { }
+		#ifndef _GLIBCXX_TXN_SAFE_DYN 
+		  #define _GLIBCXX_TXN_SAFE_DYN 
+		#endif
+		#ifndef _GLIBCXX_USE_NOEXCEPT 
+		  #define _GLIBCXX_USE_NOEXCEPT 
+		#endif
+		const char *what() const _GLIBCXX_TXN_SAFE_DYN _GLIBCXX_USE_NOEXCEPT { return msg.c_str(); }
+	#endif
 	};
 
-	struct BRuntimeException : public std::exception {
-		BRuntimeException() : message("Invalid operation") { }
-		BRuntimeException(std::string msg) : message(msg) { }
-		const char *what() const throw() {
-			return message.c_str();
-		}
-	private:
-		std::string message;
+	class BInvalidOperationException : public BRuntimeException {
+	public:
+		BInvalidOperationException() : BRuntimeException("Invalid operation") { }
+		BInvalidOperationException(std::string msg) : BRuntimeException(msg) { }
 	};
 
 	class BVar {
@@ -114,10 +125,10 @@ namespace Bliss {
 		bool CompEq (const BVar &other) const;
 		void assign(BVarContainer* cnt);
 		void assign(const BVar &other);
-		BVar &operator+= (const BVar &rhs)& throw(BInvalidOperationException);
-		BVar &operator-= (const BVar &rhs)& throw (BInvalidOperationException);
-		BVar &operator*= (const BVar &rhs)& throw (BInvalidOperationException);
-		BVar &operator/= (const BVar &rhs)& throw(BInvalidOperationException);
+		BVar &operator+= (const BVar &rhs)& THROWS(BInvalidOperationException);
+		BVar &operator-= (const BVar &rhs)& THROWS(BInvalidOperationException);
+		BVar &operator*= (const BVar &rhs)& THROWS(BInvalidOperationException);
+		BVar &operator/= (const BVar &rhs)& THROWS(BInvalidOperationException);
 		bool operator== (const BVar &rhs) const;
 		bool operator!= (const BVar &rhs) const;
 		BVar &operator=(const BVar &&other) noexcept;
@@ -126,8 +137,37 @@ namespace Bliss {
 
 	std::ostream &operator<<(std::ostream &os, const BVar &v);
 
-	namespace internal {
+	namespace detail {
 		extern BListType emptyList;
+	}
+
+	namespace util {
+		template<typename T>
+		bool TryStringToNumber(const std::string &str, T& result) {
+			std::stringstream stream(str);
+			stream >> result;
+			return !stream.fail();
+		}
+	}
+
+	namespace Parser {
+		class ParserException : public BRuntimeException {
+		public:
+			ParserException() : BRuntimeException("Parser exception") { }
+			ParserException(std::string msg) : BRuntimeException(msg) { }
+		};
+
+		namespace detail {
+			typedef std::string StringType;
+			using TokenType = std::string;
+			typedef std::list<TokenType> TokenListType;
+			TokenListType tokenise(const TokenType &str) THROWS(ParserException);
+			BVar atom(const TokenType &token) THROWS(ParserException);
+			BVar read_from(TokenListType &tokens) THROWS(ParserException);
+			BVar read(const StringType &str) THROWS(ParserException);
+		}
+
+		BVar Read(const detail::StringType &str);
 	}
 
 	class BVarContainer {
@@ -143,16 +183,16 @@ namespace Bliss {
 		virtual std::string StringValue() const = 0;
 		virtual std::string StringRepr() const = 0;
 		virtual BVarContainer *duplicate() const = 0;
-		virtual void add(const BVarContainer &other) throw(BInvalidOperationException) {
+		virtual void add(const BVarContainer &other) THROWS(BInvalidOperationException) {
 			throw new BInvalidOperationException("add: not implemented for this type");
 		}
-		virtual void subtract(const BVarContainer &other) throw(BInvalidOperationException) {
+		virtual void subtract(const BVarContainer &other) THROWS(BInvalidOperationException) {
 			throw new BInvalidOperationException("subtract: not implemented for this type");
 		}
-		virtual void multiply(const BVarContainer &other) throw(BInvalidOperationException) {
+		virtual void multiply(const BVarContainer &other) THROWS(BInvalidOperationException) {
 			throw new BInvalidOperationException("multiply: not implemented for this type");
 		}
-		virtual void divide(const BVarContainer &other) throw(BInvalidOperationException) {
+		virtual void divide(const BVarContainer &other) THROWS(BInvalidOperationException) {
 			throw new BInvalidOperationException("divide: not implemented for this type");
 		}
 		virtual bool CompEq(const BVarContainer &other) const {
@@ -162,10 +202,10 @@ namespace Bliss {
 		virtual BVar Tail() const { return Nil; }
 		virtual BVar Index(size_t Index) const { return Nil; }
 		virtual size_t Length() const { return 0; }
-		virtual BListType::iterator Begin () { return internal::emptyList.begin(); }
-		virtual BListType::iterator End () { return internal::emptyList.end(); }
-		virtual BListType::const_iterator CBegin () const { return internal::emptyList.cbegin(); }
-		virtual BListType::const_iterator CEnd () const { return internal::emptyList.cend(); }
+		virtual BListType::iterator Begin () { return detail::emptyList.begin(); }
+		virtual BListType::iterator End () { return detail::emptyList.end(); }
+		virtual BListType::const_iterator CBegin () const { return detail::emptyList.cbegin(); }
+		virtual BListType::const_iterator CEnd () const { return detail::emptyList.cend(); }
 
 		virtual BEnvPtr EnvPtr() { return nullptr; }
 		virtual ProcType ProcValue() const { return NotAProc; }
@@ -224,25 +264,25 @@ namespace Bliss {
 			BVarContainer *duplicate() const {
 				return new BVarIntContainer(value);
 			}
-			void add(const BVarContainer &other) throw(BInvalidOperationException) {
+			void add(const BVarContainer &other) THROWS(BInvalidOperationException) {
 				// TODO: type checking
 				if (!other.CanCastInt())
 					throw new BInvalidOperationException();
 				value += other.IntValue();
 			}
-			void subtract(const BVarContainer &other) throw(BInvalidOperationException) {
+			void subtract(const BVarContainer &other) THROWS(BInvalidOperationException) {
 				// TODO: type checking
 				if (!other.CanCastInt())
 					throw new BInvalidOperationException();
 				value -= other.IntValue();
 			}
-			void multiply(const BVarContainer &other) throw(BInvalidOperationException) {
+			void multiply(const BVarContainer &other) THROWS(BInvalidOperationException) {
 				// TODO: type checking
 				if (!other.CanCastInt())
 					throw new BInvalidOperationException();
 				value *= other.IntValue();
 			}
-			void divide(const BVarContainer &other) throw(BInvalidOperationException) {
+			void divide(const BVarContainer &other) THROWS(BInvalidOperationException) {
 				// TODO: type checking
 				if (!other.CanCastInt())
 					throw new BInvalidOperationException();
@@ -266,7 +306,7 @@ namespace Bliss {
 			BVarContainer *duplicate() const {
 				return new BVarStringContainer(value);
 			}
-			void add(const BVarContainer &other) throw(BInvalidOperationException) {
+			void add(const BVarContainer &other) THROWS(BInvalidOperationException) {
 				// TODO: type checking
 				if (!other.CanCastString())
 					throw new BInvalidOperationException();
@@ -348,7 +388,7 @@ namespace Bliss {
 			template<typename iterator_type>
 			BVarListContainer(iterator_type begin, iterator_type end) : BVarContainer(BVarType::List),
 				value(begin, end) { }
-			void add(const BVarContainer &other) throw(BInvalidOperationException) {
+			void add(const BVarContainer &other) THROWS(BInvalidOperationException) {
 				value.push_back(BVar(other.duplicate()));
 			}
 

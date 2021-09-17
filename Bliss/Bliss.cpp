@@ -2,6 +2,7 @@
 //
 
 #include <iostream>
+#include <ctype.h>
 #include "Bliss.h"
 
 // Shared
@@ -9,13 +10,14 @@ namespace Bliss {
 	BVarAtomLibrary AtomLibrary;
 	BVar True(0), False(0), Nil(0); // Filled in later
 	// Builtin keywords
-	BAtomType builtin_if, builtin_define, builtin_set, builtin_lambda, builtin_begin;
+	BAtomType builtin_quote, builtin_if, builtin_define, builtin_set, builtin_lambda, builtin_begin;
 
 	// later
 	bool Init() {
 		True = BVar::Atom("true");
 		False = BVar::Atom("false");
 		Nil = BVar::Atom("nil");
+		builtin_quote = AtomLibrary.declare("quote");
 		builtin_if = AtomLibrary.declare("if");
 		builtin_define = AtomLibrary.declare("define");
 		builtin_set = AtomLibrary.declare("set!");
@@ -93,19 +95,19 @@ namespace Bliss {
 	void BVar::assign(const BVar &other) {
 		container = std::unique_ptr<BVarContainer>(other.container->duplicate());
 	}
-	BVar &BVar::operator+= (const BVar &rhs)& throw(BInvalidOperationException) {
+	BVar &BVar::operator+= (const BVar &rhs)& THROWS(BInvalidOperationException) {
 		container->add(*rhs.container);
 		return *this;
 	}
-	BVar &BVar::operator-= (const BVar &rhs)& throw (BInvalidOperationException) {
+	BVar &BVar::operator-= (const BVar &rhs)& THROWS(BInvalidOperationException) {
 		container->subtract(*rhs.container);
 		return *this;
 	} 
-	BVar &BVar::operator*= (const BVar &rhs)& throw(BInvalidOperationException) {
+	BVar &BVar::operator*= (const BVar &rhs)& THROWS(BInvalidOperationException) {
 		container->multiply(*rhs.container);
 		return *this;
 	}
-	BVar &BVar::operator/= (const BVar &rhs)& throw (BInvalidOperationException) {
+	BVar &BVar::operator/= (const BVar &rhs)& THROWS(BInvalidOperationException) {
 		container->divide(*rhs.container);
 		return *this;
 	} 
@@ -117,8 +119,9 @@ namespace Bliss {
 		return os;
 	}
 	BVar &BVar::operator=(const BVar &&other) noexcept {
-		BVar tmp(other);
-		std::swap(container, tmp.container);
+		//BVar tmp(other);
+		//std::swap(container, tmp.container);
+		assign(other);
 		return *this;
 	}
 	BVar &BVar::operator=(BVar &other) noexcept {
@@ -126,7 +129,7 @@ namespace Bliss {
 		return *this;
 	}
 
-	namespace internal {
+	namespace detail {
 		BListType emptyList;
 		const size_t max_depth = 20;
 		const char   indent_char = '-';
@@ -149,9 +152,117 @@ namespace Bliss {
 		}
 	}
 
+	// Parser
+	namespace Parser {
+		namespace detail {
+			std::string::value_type startOf(const std::string &str) {
+				if (str.empty()) return '\0';
+				return *(str.cbegin());
+			}
+			std::string::value_type endOf(const std::string &str) {
+				if (str.empty()) return '\0';
+				return *(str.cend() - 1);
+			}
+			TokenListType tokenise(const TokenType &str) THROWS(ParserException) {
+				TokenListType tokens;
+				const char *s = str.c_str();
+				while (*s) {
+					// Skip whitespace
+					while (isspace(*s))
+						++s;
+					// Skip comment lines
+					if (*s == ';' && *(s + 1) == ';')
+						while (*s && *s != '\n' && *s != '\r')
+							++s;
+					// List open or close
+					else if (*s == '(' || *s == ')')
+						tokens.push_back(*s++ == '(' ? "(" : ")");
+					// "String" in quotes
+					else if (*s == '"') {
+						const char *t = s;
+						int escape = 0;
+						do {
+							++t;
+							if (escape != 0) escape--;
+							if (*t == '\\')
+								escape = 2; // skip this and the next character
+						} while (*t && (escape != 0 || *t != '"'));
+						++t;
+						tokens.push_back(StringType(s, t));
+						s = t;
+					// A generic token
+					} else {
+						const char *t = s;
+						while (*t && !isspace(*t) && *t != '(' && *t != ')')
+							++t;
+						tokens.push_back(StringType(s, t));
+						s = t;
+					}
+				}
+				return tokens;
+			}
+			BVar atom(const TokenType &token) THROWS(ParserException) {
+				if(startOf(token) == '"' && endOf(token) == '"')
+					return BVar(std::string(token.cbegin() + 1, token.cend() - 1));
+				else if(isdigit(token[0]) || (token[0] == '-' && isdigit(token[1]))) {
+					// Number
+					// TODO: support more than just int
+					BIntType number;
+					if (util::TryStringToNumber(token, number)) {
+						return BVar(number);
+					}
+				}
+				return BVar::Atom(token);
+			}
+			BVar read_from(TokenListType &tokens) THROWS(ParserException) {
+				if (tokens.empty()) throw ParserException("Missing opening token");
+
+				const TokenType token(tokens.front());
+				tokens.pop_front();
+				if (token == "(") {
+					BListType cells;
+					while (tokens.front() != ")") {
+						cells.push_back(read_from(tokens));
+						if (tokens.empty()) throw ParserException("Missing closing )");
+					}
+					if (tokens.empty()) throw ParserException("Missing closing )");
+					tokens.pop_front();
+					return BVar(cells);
+				} else if(token == "[") {
+					// [: auto list open
+					// [1 2 3] => (list 1 2 3)
+					BListType cells({BVar::Atom("list")});
+					while (tokens.front() != "]") {
+						cells.push_back(read_from(tokens));
+						if (tokens.empty()) throw ParserException("Missing closing ]");
+					}
+					if (tokens.empty()) throw ParserException("Missing closing ]");
+					tokens.pop_front();
+					return BVar(cells);
+				} else if(startOf(token) == '\'') {
+					BListType cell({BVar::Atom("quote")});
+					if (token == "'")
+						tokens.push_front(token.substr(1));
+					cell.push_back(read_from(tokens));
+					return BVar(cell);
+				} else {
+					return atom(token);
+				}
+			}
+			BVar read(const StringType &str) THROWS(ParserException) {
+				TokenListType tokens(tokenise(str));
+				return read_from(tokens);
+			}
+		}
+
+		BVar Read(const detail::StringType &str) {
+			return detail::read(str);
+		}
+	}
+
 	// Eval
-	BVar Eval(BVar x, BVar env) throw(BRuntimeException) {
-		using namespace internal;
+	BVar Eval(BVar x, BVar env) THROWS(BRuntimeException) {
+		using namespace detail;
 
 		for( ;; ) {
 			EvalDepth++;
@@ -159,9 +270,8 @@ namespace Bliss {
 			if (Debug) std::cerr << DepthStr() << "Eval(" << x << ")" << debug_endstr;
 			if (type == BVarType::Atom)
 			{
-				BEnvPtr in_env = env.EnvPtr();
 				BVar out(0);
-				if (in_env->TryFind(x.AtomValue(), out)) {
+				if (env.EnvPtr()->TryFind(x.AtomValue(), out)) {
 					if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << out << debug_endstr;
 					EvalDepth--;
 					return out;
@@ -180,36 +290,33 @@ namespace Bliss {
 			// List, invoke builtin or function call
 			const BVar &first = x.Head();
 			// Could be const if we could get iterators into BVar
-			BVar rest = x.Tail();
 			if (first.Type() == BVarType::Atom) {
 				const BAtomType first_atom = first.AtomValue();
-				if (first_atom == builtin_if) {
+				if (first_atom == builtin_quote) {
+					return x.Index(1);
+				} else if (first_atom == builtin_if) {
 					// TODO: length checks
 					const BVar &cond = Eval(x.Index(1), env);
 					const BVar &condeq = x.Index(2);
-					BVar alt = Nil;
-					if (x.Length() > 3)
-						alt = x.Index(3);
-					x = BVar(cond == False ? alt : condeq);
+					BVar alt(x.Length() > 3 ? x.Index(3) : Nil);
+					x.assign(cond == False ? alt : condeq);
 					// Tail recurse
 					if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << x << debug_endstr;
 					EvalDepth--;
 					continue;
 				} else if (first_atom == builtin_define) {
-					BEnvPtr in_env = env.EnvPtr();
-					const BVar &name = rest.Head();
-					const BVar &value = Eval(rest.Tail().Head(), env);
-					if (!in_env->TryInsert(name.AtomValue(), value)) {
+					const BVar &name = x.Index(1);
+					const BVar &value = Eval(x.Index(2), env);
+					if (!env.EnvPtr()->TryInsert(name.AtomValue(), value)) {
 						throw BRuntimeException(std::string("Key already defined: ") + name.StringValue());
 					}
 					if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << value << debug_endstr;
 					EvalDepth--;
 					return value;
 				} else if (first_atom == builtin_set) {
-					BEnvPtr in_env = env.EnvPtr();
-					const BVar &name = rest.Head();
-					const BVar &value = Eval(rest.Tail().Head(), env);
-					if (!in_env->TrySet(name.AtomValue(), value)) {
+					const BVar &name = x.Index(1);
+					const BVar &value = Eval(x.Index(2), env);
+					if (!env.EnvPtr()->TrySet(name.AtomValue(), value)) {
 						throw BRuntimeException(std::string("Key not defined: ") + name.StringValue());
 					}
 					if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << value << debug_endstr;
@@ -221,12 +328,12 @@ namespace Bliss {
 					EvalDepth--;
 					return result;
 				} else if (first_atom == builtin_begin) {
-					auto it = rest.CBegin();
-					auto end = rest.CEnd() - 1;
+					auto it = x.CBegin() + 1;
+					auto end = x.CEnd() - 1;
 					for( ; it != end; ++it)
 						Eval(*it, env);
 					// Tail recurse
-					x = BVar(*it);
+					x.assign(*it);
 					if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << x << debug_endstr;
 					EvalDepth--;
 					continue;
@@ -235,12 +342,10 @@ namespace Bliss {
 			// Function call.
 			BListType args;
 			BVar fun = Eval(first, env);
-			auto it = rest.CBegin();
-			auto end = rest.CEnd();
-			for ( ; it != end; ++it)
+			for (auto it = x.CBegin() + 1; it != x.CEnd(); ++it)
 				args.push_back(Eval(*it, env));
-			const auto tfun = fun.Type();
-			if (tfun == BVarType::Lambda) {
+			switch(fun.Type()) {
+			case BVarType::Lambda: {
 				// Create new environment
 				BEnvPtr child_env = std::make_shared<BEnvironment>(fun.EnvPtr());
 				BVar fun_args = fun.Index(0);
@@ -266,17 +371,23 @@ namespace Bliss {
 				if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << x << debug_endstr;
 				EvalDepth--;
 				continue;
-			} else if (tfun == BVarType::Proc) {
-				const auto result = fun.ProcValue()(args);
+			}
+
+			case BVarType::Proc: {
+				const BVar &result = fun.ProcValue()(args);
 				if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << result << debug_endstr;
 				EvalDepth--;
 				return result;
-			} else if (tfun == BVarType::ProcWithEnvironment) {
-				const auto result = fun.ProcWithEnvironmentValue()(args, env.EnvPtr());
+			}
+				
+			case BVarType::ProcWithEnvironment: {
+				const BVar &result = fun.ProcWithEnvironmentValue()(args, env.EnvPtr());
 				if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << result << debug_endstr;
 				EvalDepth--;
 				return result;
-			} else {
+			}
+				
+			default:
 				std::cerr << "Invoke attempted on something not a function\n" <<
 							 "  Type: " << (int)fun.Type() << std::endl <<
 							 "  Repr: " << fun.StringRepr() << std::endl;
@@ -297,7 +408,7 @@ namespace Bliss {
 			return Nil;
 		}
 
-		namespace internal {
+		namespace detail {
 			template<class Callback>
 			BVar FoldLeft(const BListType &args, Callback callback) {
 				if (args.empty()) return BVar(0);
@@ -309,16 +420,16 @@ namespace Bliss {
 		}
 
 		BVar Plus(const BListType &args) {
-			return internal::FoldLeft(args, [](BVar &value, const BVar &x) { value += x; });
+			return detail::FoldLeft(args, [](BVar &value, const BVar &x) { value += x; });
 		}
 		BVar Minus(const BListType &args) {
-			return internal::FoldLeft(args, [](BVar &value, const BVar &x) { value -= x; });
+			return detail::FoldLeft(args, [](BVar &value, const BVar &x) { value -= x; });
 		}
 		BVar Multiply(const BListType &args) {
-			return internal::FoldLeft(args, [](BVar &value, const BVar &x) { value *= x; });
+			return detail::FoldLeft(args, [](BVar &value, const BVar &x) { value *= x; });
 		}
 		BVar Divide(const BListType &args) {
-			return internal::FoldLeft(args, [](BVar &value, const BVar &x) { value /= x; });
+			return detail::FoldLeft(args, [](BVar &value, const BVar &x) { value /= x; });
 		}
 		BVar Equals(const BListType &args) {
 			// TODO: express across all vars
@@ -327,6 +438,16 @@ namespace Bliss {
 		BVar NotEquals(const BListType &args) {
 			return args.at(0) != args.at(1) ? True : False;
 		}
+	}
+
+	void AddStandardLibrary(BEnvPtr env) {
+		env->TryInsert(AtomLibrary.declare("print"), BVar(StandardLibrary::Print));
+		env->TryInsert(AtomLibrary.declare("+"), BVar(StandardLibrary::Plus));
+		env->TryInsert(AtomLibrary.declare("-"), BVar(StandardLibrary::Minus));
+		env->TryInsert(AtomLibrary.declare("*"), BVar(StandardLibrary::Multiply));
+		env->TryInsert(AtomLibrary.declare("/"), BVar(StandardLibrary::Divide));
+		env->TryInsert(AtomLibrary.declare("=="), BVar(StandardLibrary::Equals));
+		env->TryInsert(AtomLibrary.declare("!="), BVar(StandardLibrary::NotEquals));
 	}
 }
 
@@ -339,16 +460,21 @@ enum TestFlags {
 	AddTest = 1 << 4,
 	FacTest = 1 << 5,
 	RecursiveTest = 1 << 6,
+	ParserTest = 1 << 7,
 };
 
 int main()
 {
-	TestFlags tf = RecursiveTest;
+	int tf = /*FacTest;//*/Primitive | Swapping | EnvTest | AddTest | FacTest | RecursiveTest | ParserTest;
 
 	if (Bliss::Init()) {
 		printf("Init failed?\n");
 		return 0;
 	}
+
+	BEnvPtr env = std::make_shared<BEnvironment>();
+	BVar _env = BVar::MakeBEnvPtr(BEnvPtr(env));
+	AddStandardLibrary(env);
 
 	BVar a(0), b("1"), c = BVar::Atom("test"), d = BVar::Atom("test");
 	BVar l = BVar::List();
@@ -376,13 +502,20 @@ int main()
 		std::cout << "l: " << l << "\n";
 	}
 
+	if (tf & EnvTest) {
+		BVar x = BVar::Atom("x");
+		env->TryInsert(AtomLibrary.declare("x"), BVar("test"));
+		std::cout << "Code: " << x << "\n";
+		std::cout << "Result: " << Eval(x, _env) << "\n";
+	}
+
 	/* Code:
 	 * (begin
 	 *   (define add (lambda (x y) (+ x y)))
 	 *   (print (add 1 2))
 	 * )
 	 */
-	BListType code({
+	BVar code({
 		BVar::Atom("begin"),
 		BListType({BVar::Atom("define"),
 			BVar::Atom("add"),
@@ -393,25 +526,6 @@ int main()
 		}),
 		BListType({BVar::Atom("print"), BListType({BVar::Atom("add"), 1, 2})})
 	});
-	
-	BEnvPtr env = std::make_shared<BEnvironment>();
-	env->TryInsert(AtomLibrary.declare("print"), BVar(StandardLibrary::Print));
-	env->TryInsert(AtomLibrary.declare("+"), BVar(StandardLibrary::Plus));
-	env->TryInsert(AtomLibrary.declare("-"), BVar(StandardLibrary::Minus));
-	env->TryInsert(AtomLibrary.declare("*"), BVar(StandardLibrary::Multiply));
-	env->TryInsert(AtomLibrary.declare("/"), BVar(StandardLibrary::Divide));
-	env->TryInsert(AtomLibrary.declare("=="), BVar(StandardLibrary::Equals));
-	env->TryInsert(AtomLibrary.declare("!="), BVar(StandardLibrary::NotEquals));
-
-	BVar _env = BVar::MakeBEnvPtr(BEnvPtr(env));
-
-	if (tf & EnvTest) {
-		BVar x = BVar::Atom("x");
-		env->TryInsert(AtomLibrary.declare("x"), BVar("test"));
-		std::cout << "Code: " << x << "\n";
-		std::cout << "Result: " << Eval(x, _env) << "\n";
-	}
-
 	if (tf & AddTest) {
 		std::cout << "Code: " << code << "\n";
 		try {
@@ -492,6 +606,22 @@ int main()
 	if (tf & RecursiveTest) {
 		std::cout << "Code: " << code << "\n";
 		try {
+			std::cout << "Result: " << Eval(code, _env) << "\n";
+		} catch (BRuntimeException &bre) {
+			std::cerr << "Exception: " << bre.what() << "\n";
+		} catch (...) {
+			std::cerr << "Exception caught.\n";
+		}
+	}
+
+	if (tf & ParserTest) {
+		try {
+			code = Parser::Read("\
+				(begin \
+					(define sub (lambda (x y) (- x y))) \
+					(print (sub 1 2)) \
+				)");
+			std::cout << "Code: " << code << "\n";
 			std::cout << "Result: " << Eval(code, _env) << "\n";
 		} catch (BRuntimeException &bre) {
 			std::cerr << "Exception: " << bre.what() << "\n";
