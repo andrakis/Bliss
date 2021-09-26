@@ -64,23 +64,28 @@ namespace Bliss {
 	BVar::BVar(const BListType &list) : container(new BVarListContainer(list)) { }
 	BVar::BVar(ProcType proc) : container(new BVarProcContainer(proc)) { }
 	BVar::BVar(ProcWithEnvironmentType proc) : container(new BVarProcWithEnvironmentContainer(proc)) { }
+	BVar::BVar(BExceptionType e) : container(new BVarExceptionContainer(e)) { }
 	BVar::BVar(BVarContainer *cnt) : container(cnt) { }
 	BVar::BVar(BVarContainer const &cnt) : container(cnt.duplicate()) { }
 	BVar::BVar(BVar const &other) : container(other.container->duplicate()) { }
 	BVar BVar::Atom(std::string name) { return BVar(new BVarAtomContainer(name)); }
+	BVar BVar::Atom(BAtomType id) { return BVar(new BVarAtomContainer(id)); }
 	BVar BVar::List() { return BVar(new BVarListContainer()); }
 	BVar BVar::List(const BListType &l) { return BVar(new BVarListContainer(l)); }
+	BVar BVar::Exception(BExceptionType ex) { return BVar(new BVarExceptionContainer(ex)); }
+	BVar BVar::Exception(const std::string &msg) { return BVar(new BVarExceptionContainer(BRuntimeException(msg))); }
 	BVar BVar::MakeBEnvPtr(BEnvPtr ptr) { return BVar(new BVarEnvironmentContainer(ptr)); }
 	BVar::~BVar() { }
 	BVarType BVar::Type() const { return container->type; }
+	BCustomType BVar::CustomType() const { return container->CustomType(); }
 	BAtomType BVar::AtomValue() const { return container->AtomValue(); }
 	BIntType BVar::IntValue() const { return container->IntValue(); }
 	std::string BVar::StringValue() const { return container->StringValue(); }
 	std::string BVar::StringRepr() const { return container->StringRepr(); }
 	bool BVar::CompEq (const BVar &other) const { return container->CompEq(*other.container); }
-	BVar BVar::Head() const { return container->Head(); }
+	const BVar& BVar::Head() const { return container->Head(); }
 	BVar BVar::Tail() const { return container->Tail(); }
-	BVar BVar::Index(size_t Index) const { return container->Index(Index); }
+	const BVar& BVar::Index(size_t Index) const { return container->Index(Index); }
 	BListType::iterator BVar::Begin() { return container->Begin(); }
 	BListType::iterator BVar::End() { return container->End(); }
 	BListType::const_iterator BVar::CBegin() const { return container->CBegin(); }
@@ -89,25 +94,27 @@ namespace Bliss {
 	BEnvPtr BVar::EnvPtr() { return container->EnvPtr(); }
 	ProcType BVar::ProcValue() const { return container->ProcValue(); }
 	ProcWithEnvironmentType BVar::ProcWithEnvironmentValue() const { return container->ProcWithEnvironmentValue(); }
+	BExceptionType BVar::Exception() { return container->Exception(); }
+	BExceptionType BVar::Exception() const { return container->Exception(); }
 	void BVar::assign(BVarContainer* cnt) {
 		container = std::unique_ptr<BVarContainer>(cnt->duplicate());
 	}
 	void BVar::assign(const BVar &other) {
 		container = std::unique_ptr<BVarContainer>(other.container->duplicate());
 	}
-	BVar &BVar::operator+= (const BVar &rhs)& THROWS(BInvalidOperationException) {
+	BVar &BVar::operator+= (const BVar &rhs)& {
 		container->add(*rhs.container);
 		return *this;
 	}
-	BVar &BVar::operator-= (const BVar &rhs)& THROWS(BInvalidOperationException) {
+	BVar &BVar::operator-= (const BVar &rhs)& {
 		container->subtract(*rhs.container);
 		return *this;
 	} 
-	BVar &BVar::operator*= (const BVar &rhs)& THROWS(BInvalidOperationException) {
+	BVar &BVar::operator*= (const BVar &rhs)& {
 		container->multiply(*rhs.container);
 		return *this;
 	}
-	BVar &BVar::operator/= (const BVar &rhs)& THROWS(BInvalidOperationException) {
+	BVar &BVar::operator/= (const BVar &rhs)& {
 		container->divide(*rhs.container);
 		return *this;
 	} 
@@ -125,16 +132,19 @@ namespace Bliss {
 		return *this;
 	}
 	BVar &BVar::operator=(BVar &other) noexcept {
-		std::swap(container, other.container);
+		//std::swap(container, other.container);
+		container = std::move(other.container);
 		return *this;
 	}
 
 	namespace detail {
 		BListType emptyList;
-		const size_t max_depth = 20;
+		BRuntimeException non_exception("Non-exception");
+		BCustomType non_custom_type("non_custom_type");
 		const char   indent_char = '-';
 		std::string  debug_endstr = "\n"; // std::endl;
-		signed EvalDepth = 0;  // has a tendency to underflow
+		DepthType EvalDepth = 0;
+		const DepthType max_depth = 20;
 		template<typename T>
 		std::string PadNumber(T number, size_t padding) {
 			std::string str = std::to_string(number);
@@ -161,9 +171,9 @@ namespace Bliss {
 			}
 			std::string::value_type endOf(const std::string &str) {
 				if (str.empty()) return '\0';
-				return *(str.cend() - 1);
+				return *(str.crbegin());
 			}
-			TokenListType tokenise(const TokenType &str) THROWS(ParserException) {
+			TokenListType tokenise(const TokenType &str) {
 				TokenListType tokens;
 				const char *s = str.c_str();
 				while (*s) {
@@ -201,7 +211,7 @@ namespace Bliss {
 				}
 				return tokens;
 			}
-			BVar atom(const TokenType &token) THROWS(ParserException) {
+			BVar atom(const TokenType &token) {
 				if(startOf(token) == '"' && endOf(token) == '"')
 					return BVar(std::string(token.cbegin() + 1, token.cend() - 1));
 				else if(isdigit(token[0]) || (token[0] == '-' && isdigit(token[1]))) {
@@ -214,7 +224,7 @@ namespace Bliss {
 				}
 				return BVar::Atom(token);
 			}
-			BVar read_from(TokenListType &tokens) THROWS(ParserException) {
+			BVar read_from(TokenListType &tokens) {
 				if (tokens.empty()) throw ParserException("Missing opening token");
 
 				const TokenType token(tokens.front());
@@ -249,7 +259,7 @@ namespace Bliss {
 					return atom(token);
 				}
 			}
-			BVar read(const StringType &str) THROWS(ParserException) {
+			BVar read(const StringType &str) {
 				TokenListType tokens(tokenise(str));
 				return read_from(tokens);
 			}
@@ -261,7 +271,7 @@ namespace Bliss {
 	}
 
 	// Eval
-	BVar Eval(BVar x, BVar env) THROWS(BRuntimeException) {
+	BVar Eval(BVar x, BVar env) {
 		using namespace detail;
 
 		for( ;; ) {
@@ -289,7 +299,6 @@ namespace Bliss {
 			}
 			// List, invoke builtin or function call
 			const BVar &first = x.Head();
-			// Could be const if we could get iterators into BVar
 			if (first.Type() == BVarType::Atom) {
 				const BAtomType first_atom = first.AtomValue();
 				if (first_atom == builtin_quote) {
@@ -298,7 +307,7 @@ namespace Bliss {
 					// TODO: length checks
 					const BVar &cond = Eval(x.Index(1), env);
 					const BVar &condeq = x.Index(2);
-					BVar alt(x.Length() > 3 ? x.Index(3) : Nil);
+					const BVar &alt = (x.Length() > 3 ? x.Index(3) : Nil);
 					x.assign(cond == False ? alt : condeq);
 					// Tail recurse
 					if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << x << debug_endstr;
@@ -366,7 +375,7 @@ namespace Bliss {
 				}
 				// Evaluate under lambda environment
 				// Tail recurse
-				x = fun.Index(1);
+				x.assign(fun.Index(1));
 				env = BVar::MakeBEnvPtr(child_env);
 				if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << x << debug_endstr;
 				EvalDepth--;
@@ -393,6 +402,14 @@ namespace Bliss {
 							 "  Repr: " << fun.StringRepr() << std::endl;
 				throw BRuntimeException("Invalid type (A)");
 			}
+		}
+	}
+
+	BVar TryEval(const BVar &code, BVar env) {
+		try {
+			return Eval(code, env);
+		} catch (BExceptionType &e) {
+			return e;
 		}
 	}
 
@@ -448,6 +465,7 @@ namespace Bliss {
 		env->TryInsert(AtomLibrary.declare("/"), BVar(StandardLibrary::Divide));
 		env->TryInsert(AtomLibrary.declare("=="), BVar(StandardLibrary::Equals));
 		env->TryInsert(AtomLibrary.declare("!="), BVar(StandardLibrary::NotEquals));
+		env->TryInsert(AtomLibrary.declare("exec"), BVar(StandardLibrary::Exec));
 	}
 }
 
@@ -461,6 +479,7 @@ enum TestFlags {
 	FacTest = 1 << 5,
 	RecursiveTest = 1 << 6,
 	ParserTest = 1 << 7,
+	ExecTest = 1 << 8,
 };
 
 int main()
@@ -506,128 +525,112 @@ int main()
 		BVar x = BVar::Atom("x");
 		env->TryInsert(AtomLibrary.declare("x"), BVar("test"));
 		std::cout << "Code: " << x << "\n";
-		std::cout << "Result: " << Eval(x, _env) << "\n";
+		std::cout << "Result: " << TryEval(x, _env) << "\n";
 	}
 
-	/* Code:
-	 * (begin
-	 *   (define add (lambda (x y) (+ x y)))
-	 *   (print (add 1 2))
-	 * )
-	 */
-	BVar code({
-		BVar::Atom("begin"),
-		BListType({BVar::Atom("define"),
-			BVar::Atom("add"),
-			BListType({BVar::Atom("lambda"),
-				BListType({BVar::Atom("x"), BVar::Atom("y")}),
-				BListType({BVar::Atom("+"), BVar::Atom("x"), BVar::Atom("y")})
-			})
-		}),
-		BListType({BVar::Atom("print"), BListType({BVar::Atom("add"), 1, 2})})
-	});
+	BVar code;
+
 	if (tf & AddTest) {
+		/* Code:
+		 * (begin
+		 *   (define add (lambda (x y) (+ x y)))
+		 *   (print (add 1 2))
+		 * )
+		 */
+		code = BListType({
+			BVar::Atom("begin"),
+			BListType({BVar::Atom("define"),
+				BVar::Atom("add"),
+				BListType({BVar::Atom("lambda"),
+					BListType({BVar::Atom("x"), BVar::Atom("y")}),
+					BListType({BVar::Atom("+"), BVar::Atom("x"), BVar::Atom("y")})
+				})
+			}),
+			BListType({BVar::Atom("print"), BListType({BVar::Atom("add"), 1, 2})})
+		});
 		std::cout << "Code: " << code << "\n";
-		try {
-			std::cout << "Result: " << Eval(code, _env) << "\n";
-		} catch (BRuntimeException &bre) {
-			std::cerr << "Exception: " << bre.what() << "\n";
-		} catch (...) {
-			std::cerr << "Exception caught.\n";
-		}
+		std::cout << "Result: " << TryEval(code, _env) << "\n";
 	}
 
-	/*
-	 * Code:
-	 * (begin
-	 *    (define fac (lambda (n) (if (== n 1) 1 (* n (fac (- n 1))))))
-	 *    (print (fac 4))
-	 * )
-	 */
-	code = BListType({
-		BVar::Atom("begin"),
-		BListType({BVar::Atom("define"), BVar::Atom("fac"),
-			BListType({BVar::Atom("lambda"),
-				BListType({BVar::Atom("n")}),
-				BListType({BVar::Atom("if"),
-					BListType({BVar::Atom("=="), BVar::Atom("n"), BVar(1)}),
-					BVar(1),
-					BListType({BVar::Atom("*"),
-						BVar::Atom("n"),
-						BListType({BVar::Atom("fac"), BListType({BVar::Atom("-"), BVar::Atom("n"), BVar(1)})})
-					})
-				})
-			})
-		}),
-		BListType({BVar::Atom("print"), BListType({BVar::Atom("fac"), BVar(4)})})
-	});
 	if (tf & FacTest) {
-		std::cout << "Code: " << code << "\n";
-		try {
-			std::cout << "Result: " << Eval(code, _env) << "\n";
-		} catch (BRuntimeException &bre) {
-			std::cerr << "Exception: " << bre.what() << "\n";
-		} catch (...) {
-			std::cerr << "Exception caught.\n";
-		}
-	}
-
-	/*
-	 * Code:
-	 * (begin
-	 *    (define fac_tr (lambda (n a) (if (== n 1) a (fac_tr (- n 1) (* n a)))))
-	 *    (define fac (lambda (n) (fac_tr n 1)))
-	 *    (print (fac 10))
-	 * )
-	 */
-	code = BListType({
-		BVar::Atom("begin"),
-		BListType({BVar::Atom("define"), BVar::Atom("fac_tr2"),
-			BListType({BVar::Atom("lambda"),
-				BListType({BVar::Atom("n"), BVar::Atom("a")}),
-				BListType({BVar::Atom("if"),
-					BListType({BVar::Atom("=="), BVar::Atom("n"), BVar(1)}),
-					BVar::Atom("a"),
-					BListType({BVar::Atom("fac_tr2"),
-						BListType({BVar::Atom("-"), BVar::Atom("n"), BVar(1)}),
-						BListType({BVar::Atom("*"), BVar::Atom("n"), BVar::Atom("a")})
+		/*
+		 * Code:
+		 * (begin
+		 *    (define fac (lambda (n) (if (== n 1) 1 (* n (fac (- n 1))))))
+		 *    (print (fac 4))
+		 * )
+		 */
+		code = BListType({
+			BVar::Atom("begin"),
+			BListType({BVar::Atom("define"), BVar::Atom("fac"),
+				BListType({BVar::Atom("lambda"),
+					BListType({BVar::Atom("n")}),
+					BListType({BVar::Atom("if"),
+						BListType({BVar::Atom("=="), BVar::Atom("n"), BVar(1)}),
+						BVar(1),
+						BListType({BVar::Atom("*"),
+							BVar::Atom("n"),
+							BListType({BVar::Atom("fac"), BListType({BVar::Atom("-"), BVar::Atom("n"), BVar(1)})})
+						})
 					})
 				})
-			})
-		}),
-		BListType({BVar::Atom("define"), BVar::Atom("fac_tr"),
-			BListType({BVar::Atom("lambda"),
-				BListType({BVar::Atom("n")}),
-				BListType({BVar::Atom("fac_tr2"), BVar::Atom("n"), BVar(1)})
-			})
-		}),
-		BListType({BVar::Atom("print"), BListType({BVar::Atom("fac_tr"), BVar(10)})})
-	});
-	if (tf & RecursiveTest) {
+			}),
+			BListType({BVar::Atom("print"), BListType({BVar::Atom("fac"), BVar(4)})})
+		});
 		std::cout << "Code: " << code << "\n";
-		try {
-			std::cout << "Result: " << Eval(code, _env) << "\n";
-		} catch (BRuntimeException &bre) {
-			std::cerr << "Exception: " << bre.what() << "\n";
-		} catch (...) {
-			std::cerr << "Exception caught.\n";
-		}
+		std::cout << "Result: " << TryEval(code, _env) << "\n";
+	}
+
+	if (tf & RecursiveTest) {
+		/*
+		 * Code:
+		 * (begin
+		 *    (define fac_tr (lambda (n a) (if (== n 1) a (fac_tr (- n 1) (* n a)))))
+		 *    (define fac (lambda (n) (fac_tr n 1)))
+		 *    (print (fac 10))
+		 * )
+		 */
+		code = BListType({
+			BVar::Atom("begin"),
+			BListType({BVar::Atom("define"), BVar::Atom("fac_tr2"),
+				BListType({BVar::Atom("lambda"),
+					BListType({BVar::Atom("n"), BVar::Atom("a")}),
+					BListType({BVar::Atom("if"),
+						BListType({BVar::Atom("=="), BVar::Atom("n"), BVar(1)}),
+						BVar::Atom("a"),
+						BListType({BVar::Atom("fac_tr2"),
+							BListType({BVar::Atom("-"), BVar::Atom("n"), BVar(1)}),
+							BListType({BVar::Atom("*"), BVar::Atom("n"), BVar::Atom("a")})
+						})
+					})
+				})
+			}),
+			BListType({BVar::Atom("define"), BVar::Atom("fac_tr"),
+				BListType({BVar::Atom("lambda"),
+					BListType({BVar::Atom("n")}),
+					BListType({BVar::Atom("fac_tr2"), BVar::Atom("n"), BVar(1)})
+				})
+			}),
+			BListType({BVar::Atom("print"), BListType({BVar::Atom("fac_tr"), BVar(10)})})
+		});
+		std::cout << "Code: " << code << "\n";
+		std::cout << "Result: " << TryEval(code, _env) << "\n";
 	}
 
 	if (tf & ParserTest) {
-		try {
-			code = Parser::Read("\
-				(begin \
-					(define sub (lambda (x y) (- x y))) \
-					(print (sub 1 2)) \
-				)");
-			std::cout << "Code: " << code << "\n";
-			std::cout << "Result: " << Eval(code, _env) << "\n";
-		} catch (BRuntimeException &bre) {
-			std::cerr << "Exception: " << bre.what() << "\n";
-		} catch (...) {
-			std::cerr << "Exception caught.\n";
-		}
+		code = Parser::Read("\
+			(begin \
+				(define sub (lambda (x y) (- x y))) \
+				(print (sub 1 2)) \
+			)");
+		std::cout << "Code: " << code << "\n";
+		std::cout << "Result: " << TryEval(code, _env) << "\n";
+	}
+
+	if (tf & ExecTest) {
+		code = Parser::Read("(begin (define R (exec \"curl -svk https://192.168.56.1:8000/\")) (print \"CURL Response:\" R))");
+		std::cout << "Code: " << code << "\n";
+		std::cout << "Result: " << TryEval(code, _env) << "\n";
 	}
 
 	// Cleanup

@@ -3,25 +3,38 @@
 
 #pragma once
 
-#include <exception>
-#include <functional>
-#include <list>
-#include <map>
-#include <memory>
+#include <exception>    // Bliss::BRuntimeException
+#include <functional>   // Bliss::ProcType, Bliss::ProcWithEnvironmentType
+#include <list>         // Bliss::Parser::detail::TokenType
+#include <map>          // Bliss::BEnvMapType
+#include <memory>       // Bliss::BEnvPtr, Bliss::BVarContainerType
 #include <string>
-#include <sstream>
-#include <tuple>
-#include <vector>
+#include <sstream>      // Bliss::BVar::operator<<
+#include <vector>       // Bliss::BListType
 
 #define Str(X) ((X)->StringValue())
 #define Repr(X) ((X)->StringRepr())
 
-// Because VC++ complains about ignoring throw(...) sections
-#if _MSC_VER
-#define THROWS(x) throw(...)
-#else
-#define THROWS(x) throw()
-#endif
+/* Determine whether we're in 32 or 64bit mode */
+#if !defined(ENV64BIT) && !defined(ENV32BIT)
+    /* Check windows */
+    #if _WIN32 || _WIN64
+        #if _WIN64
+            #define ENV64BIT 1
+        #else
+            #define ENV32BIT 1
+        #endif
+    #endif
+
+    /* Check GCC */
+    #if __GNUC__
+        #if __x86_64__ || __ppc64__
+            #define ENV64BIT 1
+        #else
+            #define ENV32BIT 1
+        #endif
+    #endif
+#endif /* !ENV64BIT && !ENV32BIT */
 
 namespace Bliss {
 	enum class BVarType {
@@ -32,10 +45,22 @@ namespace Bliss {
 		Lambda,
 		Environment,
 		Proc,
-		ProcWithEnvironment
+		ProcWithEnvironment,
+		Exception,
+		/// <summary>
+		/// Use the CustomType() member
+		/// </summary>
+		Custom
 	};
 	typedef size_t BAtomType;
+
+#if ENV64BIT
+	typedef long BIntType;
+#else
 	typedef int BIntType;
+#endif
+
+	typedef std::string BCustomType;
 
 	class BVar;
 	class BVarContainer;
@@ -45,6 +70,7 @@ namespace Bliss {
 
 	typedef typename std::shared_ptr<BEnvironment> BEnvPtr;
 	typedef typename std::map<BAtomType,BVar> BEnvMapType;
+	typedef typename std::exception BExceptionType;
 
 	class BEnvironment {
 	public:
@@ -90,7 +116,13 @@ namespace Bliss {
 	};
 
 	class BVar {
-		std::unique_ptr<BVarContainer> container;
+#ifdef BLISS_ALWAYS_SHARED
+		typedef std::shared_ptr<BVarContainer> BVarContainerType;
+#else
+		typedef std::unique_ptr<BVarContainer> BVarContainerType;
+#endif
+		BVarContainerType container;
+
 	public:
 		BVar() : BVar(0) { }
 		BVar(int value);
@@ -98,15 +130,20 @@ namespace Bliss {
 		BVar(const BListType &list);
 		BVar(ProcType proc);
 		BVar(ProcWithEnvironmentType proc);
+		BVar(BExceptionType);
 		BVar(BVarContainer *cnt);
 		BVar(BVarContainer const &cnt);
 		BVar(BVar const &other);
 		static BVar Atom(std::string name);
+		static BVar Atom(BAtomType id);
 		static BVar List();
 		static BVar List(const BListType &l);
+		static BVar Exception(BExceptionType);
+		static BVar Exception(const std::string &);
 		static BVar MakeBEnvPtr(BEnvPtr ptr);
 		~BVar();
 		BVarType Type() const;
+		BCustomType CustomType() const;
 		BAtomType AtomValue() const;
 		BIntType IntValue() const;
 		std::string StringValue() const;
@@ -115,20 +152,22 @@ namespace Bliss {
 		BListType::iterator End();
 		BListType::const_iterator CBegin() const;
 		BListType::const_iterator CEnd() const;
-		BVar Head() const;
+		const BVar &Head() const;
 		BVar Tail() const;
-		BVar Index(size_t Index) const;
+		const BVar &Index(size_t Index) const;
 		size_t Length() const;
 		BEnvPtr EnvPtr();
 		ProcType ProcValue() const;
 		ProcWithEnvironmentType ProcWithEnvironmentValue() const;
+		BExceptionType Exception();
+		BExceptionType Exception() const;
 		bool CompEq (const BVar &other) const;
 		void assign(BVarContainer* cnt);
 		void assign(const BVar &other);
-		BVar &operator+= (const BVar &rhs)& THROWS(BInvalidOperationException);
-		BVar &operator-= (const BVar &rhs)& THROWS(BInvalidOperationException);
-		BVar &operator*= (const BVar &rhs)& THROWS(BInvalidOperationException);
-		BVar &operator/= (const BVar &rhs)& THROWS(BInvalidOperationException);
+		BVar &operator+= (const BVar &rhs)&;
+		BVar &operator-= (const BVar &rhs)&;
+		BVar &operator*= (const BVar &rhs)&;
+		BVar &operator/= (const BVar &rhs)&;
 		bool operator== (const BVar &rhs) const;
 		bool operator!= (const BVar &rhs) const;
 		BVar &operator=(const BVar &&other) noexcept;
@@ -139,6 +178,9 @@ namespace Bliss {
 
 	namespace detail {
 		extern BListType emptyList;
+		extern BRuntimeException non_exception;
+		extern BCustomType non_custom_type;
+		using DepthType = signed;  // has a tendency to underflow if an exception occurs
 	}
 
 	namespace util {
@@ -161,13 +203,17 @@ namespace Bliss {
 			typedef std::string StringType;
 			using TokenType = std::string;
 			typedef std::list<TokenType> TokenListType;
-			TokenListType tokenise(const TokenType &str) THROWS(ParserException);
-			BVar atom(const TokenType &token) THROWS(ParserException);
-			BVar read_from(TokenListType &tokens) THROWS(ParserException);
-			BVar read(const StringType &str) THROWS(ParserException);
+			TokenListType tokenise(const TokenType &str);
+			BVar atom(const TokenType &token);
+			BVar read_from(TokenListType &tokens);
+			BVar read(const StringType &str);
 		}
 
 		BVar Read(const detail::StringType &str);
+	}
+
+	namespace StandardLibrary {
+		BVar Exec (const BListType &args);
 	}
 
 	class BVarContainer {
@@ -175,6 +221,7 @@ namespace Bliss {
 		BVarContainer(BVarType t) : type(t) { }
 	public:
 		const BVarType type;
+		virtual BCustomType CustomType() const { return detail::non_custom_type; }
 		virtual ~BVarContainer() { }
 		virtual bool CanCastInt() const { return false; }
 		virtual bool CanCastString() const { return false; }
@@ -183,24 +230,29 @@ namespace Bliss {
 		virtual std::string StringValue() const = 0;
 		virtual std::string StringRepr() const = 0;
 		virtual BVarContainer *duplicate() const = 0;
-		virtual void add(const BVarContainer &other) THROWS(BInvalidOperationException) {
-			throw new BInvalidOperationException("add: not implemented for this type");
+		virtual void add(const BVarContainer &other) {
+			(void)other;
+			throw BInvalidOperationException("add: not implemented for this type");
 		}
-		virtual void subtract(const BVarContainer &other) THROWS(BInvalidOperationException) {
-			throw new BInvalidOperationException("subtract: not implemented for this type");
+		virtual void subtract(const BVarContainer &other) {
+			(void)other;
+			throw BInvalidOperationException("subtract: not implemented for this type");
 		}
-		virtual void multiply(const BVarContainer &other) THROWS(BInvalidOperationException) {
-			throw new BInvalidOperationException("multiply: not implemented for this type");
+		virtual void multiply(const BVarContainer &other) {
+			(void)other;
+			throw BInvalidOperationException("multiply: not implemented for this type");
 		}
-		virtual void divide(const BVarContainer &other) THROWS(BInvalidOperationException) {
-			throw new BInvalidOperationException("divide: not implemented for this type");
+		virtual void divide(const BVarContainer &other) {
+			(void)other;
+			throw BInvalidOperationException("divide: not implemented for this type");
 		}
 		virtual bool CompEq(const BVarContainer &other) const {
+			(void)other;
 			return false;
 		}
-		virtual BVar Head() const { return Nil; }
+		virtual const BVar &Head() const { return Nil; }
 		virtual BVar Tail() const { return Nil; }
-		virtual BVar Index(size_t Index) const { return Nil; }
+		virtual const BVar &Index(size_t Index) const { (void)Index; return Nil; }
 		virtual size_t Length() const { return 0; }
 		virtual BListType::iterator Begin () { return detail::emptyList.begin(); }
 		virtual BListType::iterator End () { return detail::emptyList.end(); }
@@ -210,11 +262,16 @@ namespace Bliss {
 		virtual BEnvPtr EnvPtr() { return nullptr; }
 		virtual ProcType ProcValue() const { return NotAProc; }
 		virtual ProcWithEnvironmentType ProcWithEnvironmentValue() const { return NotAProcWithEnvironment; }
+		virtual BExceptionType Exception() { return detail::non_exception; }
+		virtual BExceptionType Exception() const { return detail::non_exception; }
 	private:
 		static BVar NotAProc(const BListType &args) {
+			(void)args;
 			return Nil;
 		}
 		static BVar NotAProcWithEnvironment(const BListType &args, BEnvPtr env) {
+			(void)args;
+			(void)env;
 			return Nil;
 		}
 	};
@@ -264,25 +321,25 @@ namespace Bliss {
 			BVarContainer *duplicate() const {
 				return new BVarIntContainer(value);
 			}
-			void add(const BVarContainer &other) THROWS(BInvalidOperationException) {
+			void add(const BVarContainer &other) {
 				// TODO: type checking
 				if (!other.CanCastInt())
 					throw new BInvalidOperationException();
 				value += other.IntValue();
 			}
-			void subtract(const BVarContainer &other) THROWS(BInvalidOperationException) {
+			void subtract(const BVarContainer &other) {
 				// TODO: type checking
 				if (!other.CanCastInt())
 					throw new BInvalidOperationException();
 				value -= other.IntValue();
 			}
-			void multiply(const BVarContainer &other) THROWS(BInvalidOperationException) {
+			void multiply(const BVarContainer &other) {
 				// TODO: type checking
 				if (!other.CanCastInt())
 					throw new BInvalidOperationException();
 				value *= other.IntValue();
 			}
-			void divide(const BVarContainer &other) THROWS(BInvalidOperationException) {
+			void divide(const BVarContainer &other) {
 				// TODO: type checking
 				if (!other.CanCastInt())
 					throw new BInvalidOperationException();
@@ -306,7 +363,7 @@ namespace Bliss {
 			BVarContainer *duplicate() const {
 				return new BVarStringContainer(value);
 			}
-			void add(const BVarContainer &other) THROWS(BInvalidOperationException) {
+			void add(const BVarContainer &other) {
 				// TODO: type checking
 				if (!other.CanCastString())
 					throw new BInvalidOperationException();
@@ -317,24 +374,24 @@ namespace Bliss {
 			}
 			bool CanCastInt() const { return true; }
 			bool CanCastString() const { return true; }
-			BVar Index(size_t Index) const {
+			/*BVar &Index(size_t Index) const {
 				auto it = value.cbegin() + Index;
 				if (it != value.cend())
 					return BVar(std::string(value, Index, 1));
 				return Nil;
 			}
-			BVar Head() const {
+			BVar &Head() const {
 				auto it = value.cbegin();
 				if (it != value.cend())
 					return BVar(std::string(1, *it));
 				return Nil;
 			}
-			BVar Tail() const {
+			BVar &Tail() const {
 				auto it = value.crbegin();
 				if (it != value.crend())
 					return BVar(std::string(1, *it));
 				return Nil;
-			}
+			}*/
 			size_t Length() const { return value.length(); }
 		};
 
@@ -343,11 +400,13 @@ namespace Bliss {
 		public:
 			BVarAtomContainer(std::string n) : BVarContainer(BVarType::Atom),
 				value(AtomLibrary.declare(n)) { }
+			BVarAtomContainer(BAtomType id) : BVarContainer(BVarType::Atom),
+				value(id) { }
 			BVarAtomContainer(const BVarAtomContainer &other) : BVarContainer(BVarType::Atom),
 				value(other.value) { }
 			BAtomType AtomValue() const { return value; }
-			std::string StringValue() const { return "'" + AtomLibrary.find(value); }
-			std::string StringRepr() const { return StringValue(); }
+			std::string StringValue() const { return AtomLibrary.find(value); }
+			std::string StringRepr() const { return "'" + StringValue(); }
 			bool CompEq(const BVarContainer &other) const {
 				if (other.type != BVarType::Atom)
 					return false;
@@ -388,13 +447,8 @@ namespace Bliss {
 			template<typename iterator_type>
 			BVarListContainer(iterator_type begin, iterator_type end) : BVarContainer(BVarType::List),
 				value(begin, end) { }
-			void add(const BVarContainer &other) THROWS(BInvalidOperationException) {
+			void add(const BVarContainer &other) {
 				value.push_back(BVar(other.duplicate()));
-			}
-
-			// Internal function
-			void _push_back(const BVar &ele) {
-				value.push_back(ele);
 			}
 
 			std::string StringValue() const { return StringMap(); }
@@ -405,29 +459,26 @@ namespace Bliss {
 			bool CompEq(const BVarContainer &other) const {
 				if (other.type != BVarType::List)
 					return false;
-				const BVarListContainer *lc = dynamic_cast<const BVarListContainer*>(&other);
-				if (!lc)
-					return false;
-				auto it1 = value.cbegin(), it2 = lc->value.cbegin();
+				auto it1 = value.cbegin(), it2 = other.CBegin();
 				for (; 
-					it1 != value.cend() && it2 != lc->value.cend();
+					it1 != value.cend() && it2 != other.CEnd();
 					++it1, ++it2) {
 					if (!it1->CompEq(*it2))
 						return false;
 				}
-				return it1 == value.cend() && it2 == lc->value.cend();
+				return it1 == value.cend() && it2 == other.CEnd();
 			}
 
-			BVar Index(size_t Index) const {
+			const BVar &Index(size_t Index) const {
 				auto it = value.cbegin() + Index;
 				if (it != value.cend())
-					return *it;
+					return value[Index];
 				return Nil;
 			}
-			BVar Head() const { 
+			const BVar &Head() const { 
 				auto it = value.cbegin();
 				if (it != value.cend())
-					return *it;
+					return value[0];
 				return Nil;
 			}
 			BVar Tail() const {
@@ -485,6 +536,34 @@ namespace Bliss {
 			std::string StringRepr() const { return StringValue(); }
 			BVarContainer *duplicate() const { return new BVarEnvironmentContainer(*this); }
 			BEnvPtr EnvPtr() { return env; }
+		};
+
+		class BVarExceptionContainer : public BVarContainer {
+			BExceptionType exception;
+		public:
+			BVarExceptionContainer(const BVarExceptionContainer &other) : BVarContainer(BVarType::Exception), exception(other.exception) { }
+			BVarExceptionContainer(BExceptionType ex) : BVarContainer(BVarType::Exception), exception(ex) { }
+			std::string StringValue() const { return std::string("#Exception: ") + exception.what(); /* TODO */ }
+			std::string StringRepr() const { return StringValue(); }
+			BVarContainer *duplicate() const { return new BVarExceptionContainer(*this); }
+			BExceptionType Exception() { return exception; }
+			BExceptionType Exception() const { return exception; }
+		};
+
+		/// <summary>
+		/// A custom type (abstract) allows for implementing any custom subtype, programmatically.
+		/// Custom types cannot be used in math operations, and their underlying value may not necessarily
+		/// be one that can be represented by standard types. It is a container that may
+		/// be passed around and used in function calls, but not directly interacted with.
+		/// </summary>
+		class BVarCustomTypeContainer : public BVarContainer {
+			BCustomType custom_type;
+		protected:
+			BVarCustomTypeContainer(const BVarCustomTypeContainer &other) : BVarContainer(BVarType::Custom), custom_type(other.custom_type) { }
+			BVarCustomTypeContainer(BCustomType type) : BVarContainer(BVarType::Custom), custom_type(type) { }
+			virtual BVarContainer *custom_duplicate() const = 0;
+		public:
+			BVarContainer *duplicate() const { return custom_duplicate(); }
 		};
 	}
 }
