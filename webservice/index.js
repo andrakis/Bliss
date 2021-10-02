@@ -1,4 +1,5 @@
 const https = require('https');
+const http = require('http');
 const fs = require('fs');
 
 const options = {
@@ -22,10 +23,13 @@ var commands = {
 	},
 };
 
-https.createServer(options, function (req, res) {
+function requestHandler (req, res) {
   console.log("GET");
   res.writeHead(200);
   res.end("hello world\n");
-}).listen(8000);
+}
 
-console.log("Listening on 8000");
+https.createServer(options, requestHandler).listen(8000);
+http.createServer({}, requestHandler).listen(8001);
+
+console.log("Listening on 8000, 8001");

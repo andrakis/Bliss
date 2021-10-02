@@ -12,6 +12,8 @@
 #include <sstream>      // Bliss::BVar::operator<<
 #include <vector>       // Bliss::BListType
 
+#define BLISS_VERSION "0.12"
+
 #define Str(X) ((X)->StringValue())
 #define Repr(X) ((X)->StringRepr())
 
@@ -21,20 +23,28 @@
     #if _WIN32 || _WIN64
         #if _WIN64
             #define ENV64BIT 1
+            #define COMPILER "(Win64/?)"
         #else
             #define ENV32BIT 1
+            #define COMPILER "(Win32/?)"
         #endif
     #endif
 
     /* Check GCC */
     #if __GNUC__
+        #define COMPILER_NAME "g++"
         #if __x86_64__ || __ppc64__
             #define ENV64BIT 1
+            #define COMPILER_ARCH " 64bit"
         #else
             #define ENV32BIT 1
+            #define COMPILER_ARCH " 32bit"
         #endif
+        #define COMPILER COMPILER_NAME " " __VERSION__ COMPILER_ARCH
     #endif
 #endif /* !ENV64BIT && !ENV32BIT */
+
+#define BANNER "Bliss v" BLISS_VERSION " compiled " __DATE__ " " __TIME__ " " COMPILER
 
 namespace Bliss {
 	enum class BVarType {
@@ -55,18 +65,21 @@ namespace Bliss {
 	typedef size_t BAtomType;
 
 #if ENV64BIT
-	typedef long BIntType;
+	typedef long long BIntType;
 #else
-	typedef int BIntType;
+	typedef long BIntType;
 #endif
 
-	typedef std::string BCustomType;
+	typedef BAtomType BCustomType;
 
 	class BVar;
 	class BVarContainer;
 	class BEnvironment;
 
 	extern BVar True, False, Nil;
+	namespace detail {
+		extern BAtomType atom_dict;
+	}
 
 	typedef typename std::shared_ptr<BEnvironment> BEnvPtr;
 	typedef typename std::map<BAtomType,BVar> BEnvMapType;
@@ -125,7 +138,8 @@ namespace Bliss {
 
 	public:
 		BVar() : BVar(0) { }
-		BVar(int value);
+		BVar(int value) : BVar((BIntType)value) { }
+		BVar(BIntType value);
 		BVar(std::string value);
 		BVar(const BListType &list);
 		BVar(ProcType proc);
@@ -144,6 +158,8 @@ namespace Bliss {
 		~BVar();
 		BVarType Type() const;
 		BCustomType CustomType() const;
+		BVarContainer *_container() { return container.get(); }
+		const BVarContainer *_const_container() const { return container.get(); }
 		BAtomType AtomValue() const;
 		BIntType IntValue() const;
 		std::string StringValue() const;
@@ -312,7 +328,7 @@ namespace Bliss {
 	namespace Containers {
 		class BVarIntContainer : public BVarContainer {
 		protected:
-			int value;
+			BIntType value;
 		public:
 			BVarIntContainer(BIntType v) : BVarContainer(BVarType::Integer), value(v) { }
 			BIntType IntValue() const { return value; }
@@ -454,6 +470,8 @@ namespace Bliss {
 			std::string StringValue() const { return StringMap(); }
 			std::string StringRepr() const { return StringMap(true); }
 			BVarContainer *duplicate() const {
+				// TODO: this is getting called a _lot_
+				std::cerr << "Duplicating list with " << value.size() << " items" << std::endl;
 				return new BVarListContainer(*this);
 			}
 			bool CompEq(const BVarContainer &other) const {
@@ -561,9 +579,69 @@ namespace Bliss {
 		protected:
 			BVarCustomTypeContainer(const BVarCustomTypeContainer &other) : BVarContainer(BVarType::Custom), custom_type(other.custom_type) { }
 			BVarCustomTypeContainer(BCustomType type) : BVarContainer(BVarType::Custom), custom_type(type) { }
+			BCustomType CustomType() const { return custom_type; }
 			virtual BVarContainer *custom_duplicate() const = 0;
+			virtual bool custom_compeq(const BVarContainer &other) const { return false; }
 		public:
 			BVarContainer *duplicate() const { return custom_duplicate(); }
+			bool CompEq(const BVarContainer &other) const {
+				if (CustomType() != other.CustomType())
+					return false;
+				return custom_compeq(other);
+			}
+		};
+
+		// So that dictionaries can be updated in-place rather than being copied, we use a shared_ptr.
+		typedef std::shared_ptr<std::map<BAtomType,BVar>> BDictType;
+		class BVarDictionaryContainer : public BVarCustomTypeContainer {
+			BDictType dict;
+			BVarContainer *custom_duplicate() const { return new BVarDictionaryContainer(*this); }
+		public:
+			BVarDictionaryContainer() : BVarCustomTypeContainer(detail::atom_dict), dict(std::make_shared<BDictType::element_type>()) { }
+			template<typename It = BDictType::element_type::const_iterator>
+			BVarDictionaryContainer(It begin, It end) : BVarCustomTypeContainer(detail::atom_dict), dict(std::make_shared<BDictType::element_type>(begin, end)) { }
+			BVarDictionaryContainer(const BVarDictionaryContainer &other) : BVarCustomTypeContainer(other), dict(other.dict) { }
+			std::string StringValue() const {
+				std::stringstream ss;
+				ss << "#dict{";
+				for (auto it = dict->cbegin(); it != dict->cend(); ++it) {
+					if (it != dict->cbegin())
+						ss << ",";
+					ss << " " << AtomLibrary.find(it->first) << ": " << it->second;
+				}
+				ss << " }";
+				return ss.str();
+			}
+			std::string StringRepr() const { return StringValue(); }
+			const BDictType GetDict() const { return dict; }
+			BDictType GetDict() { return dict; }
+			bool custom_compeq(const BVarContainer &other) const {
+				const BVarDictionaryContainer *p = dynamic_cast<const BVarDictionaryContainer*>(&other);
+				if (!p) {
+					std::cerr << "ERR: could not get dictionary container" << std::endl;
+					return false;
+				}
+				BDictType dict2 = p->GetDict();
+				auto it1 = dict->cbegin(), it2 = dict2->cbegin();
+				for (; 
+					it1 != dict->cend() && it2 != dict2->cend();
+					++it1, ++it2) {
+					if (it1->first != it2->first || !it1->second.CompEq(it2->second))
+						return false;
+				}
+				return it1 == dict->cend() && it2 == dict2->cend();
+			}
+			static BVarContainer *Copy(const BVar &from) {
+				const BVarDictionaryContainer *p = dynamic_cast<const BVarDictionaryContainer*>(from._const_container());
+				if (!IsDict(from) || !p) {
+					std::cerr << "WARN: attempting to copy dictionary, but given is not a dictionary! " << (int)from.Type() << std::endl;
+					return new BVarDictionaryContainer();
+				}
+				return new BVarDictionaryContainer(p->GetDict()->cbegin(), p->GetDict()->cend());
+			}
+			static bool IsDict(const BVar &var) {
+				return var.Type() == BVarType::Custom && var.CustomType() == ::Bliss::detail::atom_dict;
+			}
 		};
 	}
 }

@@ -11,6 +11,9 @@ namespace Bliss {
 	BVar True(0), False(0), Nil(0); // Filled in later
 	// Builtin keywords
 	BAtomType builtin_quote, builtin_if, builtin_define, builtin_set, builtin_lambda, builtin_begin;
+	namespace detail {
+		BAtomType atom_dict;
+	}
 
 	// later
 	bool Init() {
@@ -23,6 +26,8 @@ namespace Bliss {
 		builtin_set = AtomLibrary.declare("set!");
 		builtin_lambda = AtomLibrary.declare("lambda");
 		builtin_begin = AtomLibrary.declare("begin");
+		detail::atom_dict = AtomLibrary.declare("dict");
+		detail::non_custom_type = AtomLibrary.declare("non_custom_type");
 		return false;
 	}
 }
@@ -59,7 +64,7 @@ namespace Bliss {
 	}
 
 	// BVar
-	BVar::BVar(int value) : container(new BVarIntContainer(value)) { }
+	BVar::BVar(BIntType value) : container(new BVarIntContainer(value)) { }
 	BVar::BVar(std::string value) : container(new BVarStringContainer(value)) { }
 	BVar::BVar(const BListType &list) : container(new BVarListContainer(list)) { }
 	BVar::BVar(ProcType proc) : container(new BVarProcContainer(proc)) { }
@@ -132,15 +137,15 @@ namespace Bliss {
 		return *this;
 	}
 	BVar &BVar::operator=(BVar &other) noexcept {
-		//std::swap(container, other.container);
-		container = std::move(other.container);
+		std::swap(container, other.container);
+		//container = std::move(other.container);
 		return *this;
 	}
 
 	namespace detail {
 		BListType emptyList;
 		BRuntimeException non_exception("Non-exception");
-		BCustomType non_custom_type("non_custom_type");
+		BCustomType non_custom_type;
 		const char   indent_char = '-';
 		std::string  debug_endstr = "\n"; // std::endl;
 		DepthType EvalDepth = 0;
@@ -250,10 +255,13 @@ namespace Bliss {
 					tokens.pop_front();
 					return BVar(cells);
 				} else if(startOf(token) == '\'') {
-					BListType cell({BVar::Atom("quote")});
+					/*BListType cell({BVar::Atom("quote")});
 					if (token == "'")
 						tokens.push_front(token.substr(1));
 					cell.push_back(read_from(tokens));
+					return BVar(cell);*/
+					tokens.push_front(token.substr(1));
+					BListType cell({BVar::Atom("quote"), read_from(tokens)});
 					return BVar(cell);
 				} else {
 					return atom(token);
@@ -436,6 +444,7 @@ namespace Bliss {
 			}
 		}
 
+#define B_FOLDLEFT(List,CallbackAccumulatorName,CallbackXName,Code) detail::FoldLeft(List, [](BVar &CallbackAccumulatorName, const BVar &CallbackXName) Code)
 		BVar Plus(const BListType &args) {
 			return detail::FoldLeft(args, [](BVar &value, const BVar &x) { value += x; });
 		}
@@ -455,6 +464,68 @@ namespace Bliss {
 		BVar NotEquals(const BListType &args) {
 			return args.at(0) != args.at(1) ? True : False;
 		}
+		BVar List(const BListType &args) {
+			return BVar::List(args);
+		}
+		
+		// Dictionary functions
+		namespace Dict {
+			using namespace ::Bliss::detail;
+			bool is_dict(const BVar &var) { return BVarDictionaryContainer::IsDict(var); }
+			// (dict:new [DictToCopy]) => dict()
+			BVar New(const BListType &args) {
+				if (args.empty())
+					return BVar(new BVarDictionaryContainer());
+				// Assuming desire to copy existing dict
+				return BVar(BVarDictionaryContainer::Copy(args.front()));
+			}
+			// (dict:key? Key Dict) => True | False
+			BVar Key(const BListType &args) {
+				const BVar &key = args.at(0);
+				const BVar &dict = args.at(1);
+				if (is_dict(dict)) {
+					const BVarDictionaryContainer *p = dynamic_cast<const BVarDictionaryContainer*>(dict._const_container());
+					if (p) {
+						return p->GetDict()->find(key.AtomValue()) != p->GetDict()->end();
+					}
+				}
+				return Nil;
+			}
+			// (dict:set! Key Value Dict) => Value
+			BVar Set(const BListType &args) {
+				const BVar &key = args.at(0);
+				const BVar &value = args.at(1);
+				BVar dict = args.at(2);
+				if (is_dict(dict)) {
+					BVarDictionaryContainer *p = dynamic_cast<BVarDictionaryContainer*>(dict._container());
+					if (p) {
+						auto it = p->GetDict()->find(key.AtomValue()); 
+						if (it != p->GetDict()->end()) {
+							it->second.assign(value);
+						} else {
+							p->GetDict()->emplace(key.AtomValue(), value);
+						}
+						return value;
+					}
+				}
+				return Nil;
+			}
+			// (dict:get Key Dict) => Value
+			BVar Get(const BListType &args) {
+				const BAtomType key = args.at(0).AtomValue();
+				const BVar &dict = args.at(1);
+				if (is_dict(dict)) {
+					const BVarDictionaryContainer *p = dynamic_cast<const BVarDictionaryContainer*>(dict._const_container());
+					if (p) {
+						auto it = p->GetDict()->find(key); 
+						if (it != p->GetDict()->end()) {
+							return it->second;
+						}
+					}
+				}
+				return Nil;
+			}
+		}
 	}
 
 	void AddStandardLibrary(BEnvPtr env) {
@@ -465,7 +536,11 @@ namespace Bliss {
 		env->TryInsert(AtomLibrary.declare("/"), BVar(StandardLibrary::Divide));
 		env->TryInsert(AtomLibrary.declare("=="), BVar(StandardLibrary::Equals));
 		env->TryInsert(AtomLibrary.declare("!="), BVar(StandardLibrary::NotEquals));
+		env->TryInsert(AtomLibrary.declare("list"), BVar(StandardLibrary::List));
 		env->TryInsert(AtomLibrary.declare("exec"), BVar(StandardLibrary::Exec));
+		env->TryInsert(AtomLibrary.declare("dict"), BVar(StandardLibrary::Dict::New));
+		env->TryInsert(AtomLibrary.declare("dict:set!"), BVar(StandardLibrary::Dict::Set));
+		env->TryInsert(AtomLibrary.declare("dict:get"), BVar(StandardLibrary::Dict::Get));
 	}
 }
 
@@ -480,16 +555,23 @@ enum TestFlags {
 	RecursiveTest = 1 << 6,
 	ParserTest = 1 << 7,
 	ExecTest = 1 << 8,
+	DictTest = 1 << 9,
 };
 
 int main()
 {
-	int tf = /*FacTest;//*/Primitive | Swapping | EnvTest | AddTest | FacTest | RecursiveTest | ParserTest;
+	int tf = /*FacTest;//*/Primitive | Swapping | EnvTest | AddTest | FacTest | RecursiveTest | ParserTest | DictTest;
+	//int tf = RecursiveTest;//FacTest;
+	//int tf = ExecTest;
+	//int tf = DictTest;
 
 	if (Bliss::Init()) {
 		printf("Init failed?\n");
-		return 0;
+		return 1;
 	}
+
+	// if (!silent)
+	std::cout << BANNER << std::endl;
 
 	BEnvPtr env = std::make_shared<BEnvironment>();
 	BVar _env = BVar::MakeBEnvPtr(BEnvPtr(env));
@@ -628,7 +710,13 @@ int main()
 	}
 
 	if (tf & ExecTest) {
-		code = Parser::Read("(begin (define R (exec \"curl -svk https://192.168.56.1:8000/\")) (print \"CURL Response:\" R))");
+		code = Parser::Read("(begin (define R (exec \"curl -svk http://192.168.83.1:8001/\")) (print \"CURL Response:\" R))");
+		std::cout << "Code: " << code << "\n";
+		std::cout << "Result: " << TryEval(code, _env) << "\n";
+	}
+
+	if (tf & DictTest) {
+		code = Parser::Read("(begin (define D1 (dict)) (define D2 (dict)) (dict:set! 'a 1 D1) (dict:set! 'a 2 D2) (print \"Dict:\" D1 D2 \"IsEqual D1,D1:\" (== D1 D1) \"IsEqual D1,D2:\" (== D1 D2)))");
 		std::cout << "Code: " << code << "\n";
 		std::cout << "Result: " << TryEval(code, _env) << "\n";
 	}
