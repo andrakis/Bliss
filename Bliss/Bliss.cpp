@@ -288,11 +288,10 @@ namespace Bliss {
 			if (Debug) std::cerr << DepthStr() << "Eval(" << x << ")" << debug_endstr;
 			if (type == BVarType::Atom)
 			{
-				BVar out(0);
-				if (env.EnvPtr()->TryFind(x.AtomValue(), out)) {
-					if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << out << debug_endstr;
+				if (env.EnvPtr()->TryFind(x.AtomValue(), x)) {
+					if (Debug) std::cerr << DepthStr() << "Eval(...) => " << x << debug_endstr;
 					EvalDepth--;
-					return out;
+					return x;
 				}
 				throw BRuntimeException(std::string("Key not found: ") + x.StringValue());
 			} else if(type != BVarType::List) {
