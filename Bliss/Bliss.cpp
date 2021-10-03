@@ -306,7 +306,7 @@ namespace Bliss {
 				return Nil;
 			}
 			// List, invoke builtin or function call
-			const BVar &first = x.Head();
+			const BVar &first = x.Index(0);
 			if (first.Type() == BVarType::Atom) {
 				const BAtomType first_atom = first.AtomValue();
 				if (first_atom == builtin_quote) {

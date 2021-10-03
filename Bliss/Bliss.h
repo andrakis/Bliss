@@ -442,8 +442,8 @@ namespace Bliss {
 		private:
 			std::string StringMap(bool repr = false) const {
 				std::string result = "(";
-				for(auto it = value.cbegin(); it != value.cend(); ++it) {
-					if (it != value.cbegin())
+				for(auto it = value->cbegin(); it != value->cend(); ++it) {
+					if (it != value->cbegin())
 						result += " ";
 					result += repr ? it->StringRepr() : it->StringValue();
 				}
@@ -451,62 +451,61 @@ namespace Bliss {
 				return result;
 			}
 		protected:
-			BListType value;
-			BVarListContainer(BVarType type) : BVarContainer(type), value() { }
-			BVarListContainer(BVarType type, const BListType &other) : BVarContainer(type), value(other) { }
+			std::shared_ptr<BListType> value;
+			BVarListContainer(BVarType type) : BVarContainer(type), value(std::make_shared<BListType>()) { }
+			BVarListContainer(BVarType type, const BListType &other) : BVarContainer(type), value(std::make_shared<BListType>(other)) { }
+			BVarListContainer(BVarType type, std::shared_ptr<BListType> other) : BVarContainer(type), value(other) { }
 			template<typename Iterator>
-			BVarListContainer(BVarType type, Iterator start, Iterator end) : BVarContainer(type), value(start, end) { }
+			BVarListContainer(BVarType type, Iterator start, Iterator end) : BVarContainer(type), value(std::make_shared<BListType>(start, end)) { }
 		public:
-			BVarListContainer() : BVarContainer(BVarType::List), value() { }
+			BVarListContainer() : BVarContainer(BVarType::List), value(std::make_shared<BListType>()) { }
 			BVarListContainer(const BVarListContainer &other) : BVarContainer(BVarType::List), value(other.value) { }
-			BVarListContainer(BListType l) : BVarContainer(BVarType::List), value(l) { }
+			BVarListContainer(BListType l) : BVarContainer(BVarType::List), value(std::make_shared<BListType>(l)) { }
 			template<typename iterator_type>
 			BVarListContainer(iterator_type begin, iterator_type end) : BVarContainer(BVarType::List),
-				value(begin, end) { }
+				value(std::make_shared<BListType>(begin, end)) { }
 			void add(const BVarContainer &other) {
-				value.push_back(BVar(other.duplicate()));
+				value->push_back(BVar(other.duplicate()));
 			}
 
 			std::string StringValue() const { return StringMap(); }
 			std::string StringRepr() const { return StringMap(true); }
 			BVarContainer *duplicate() const {
-				// TODO: this is getting called a _lot_
-				std::cerr << "Duplicating list with " << value.size() << " items" << std::endl;
 				return new BVarListContainer(*this);
 			}
 			bool CompEq(const BVarContainer &other) const {
 				if (other.type != BVarType::List)
 					return false;
-				auto it1 = value.cbegin(), it2 = other.CBegin();
+				auto it1 = value->cbegin(), it2 = other.CBegin();
 				for (; 
-					it1 != value.cend() && it2 != other.CEnd();
+					it1 != value->cend() && it2 != other.CEnd();
 					++it1, ++it2) {
 					if (!it1->CompEq(*it2))
 						return false;
 				}
-				return it1 == value.cend() && it2 == other.CEnd();
+				return it1 == value->cend() && it2 == other.CEnd();
 			}
 
 			const BVar &Index(size_t Index) const {
-				auto it = value.cbegin() + Index;
-				if (it != value.cend())
-					return value[Index];
+				auto it = value->cbegin() + Index;
+				if (it != value->cend())
+					return (*value)[Index];
 				return Nil;
 			}
 			const BVar &Head() const { 
-				auto it = value.cbegin();
-				if (it != value.cend())
-					return value[0];
+				auto it = value->cbegin();
+				if (it != value->cend())
+					return (*value)[0];
 				return Nil;
 			}
 			BVar Tail() const {
-				return BVar(new BVarListContainer(value.cbegin() + 1, value.cend()));
+				return BVar(new BVarListContainer(value->cbegin() + 1, value->cend()));
 			}
-			size_t Length() const { return value.size(); }
-			BListType::iterator Begin () { return value.begin(); }
-			BListType::iterator End () { return value.end(); }
-			BListType::const_iterator CBegin () const { return value.cbegin(); }
-			BListType::const_iterator CEnd () const { return value.cend(); }
+			size_t Length() const { return value->size(); }
+			BListType::iterator Begin () { return value->begin(); }
+			BListType::iterator End () { return value->end(); }
+			BListType::const_iterator CBegin () const { return value->cbegin(); }
+			BListType::const_iterator CEnd () const { return value->cend(); }
 		};
 
 		class BVarLambdaContainer : public BVarListContainer {
@@ -514,8 +513,8 @@ namespace Bliss {
 		public:
 			BVarLambdaContainer(const BVarLambdaContainer &other) : BVarListContainer(BVarType::Lambda, other.value), env(other.env) { }
 			BVarLambdaContainer(const BVar &args, const BVar &body, BEnvPtr _env) : BVarListContainer(BVarType::Lambda), env(_env) {
-				value.push_back(args);
-				value.push_back(body);
+				value->push_back(args);
+				value->push_back(body);
 			}
 			std::string StringValue() const { return "#Lambda"; /* TODO */ }
 			std::string StringRepr() const { return StringValue(); }
