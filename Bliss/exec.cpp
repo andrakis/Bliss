@@ -6,12 +6,13 @@
 #include <string>
 #include <array>
 
-#ifdef _WINDOWS
+#include "Bliss.h"
+
+#if defined(_WINDOWS) || defined(_MSC_VER)
 #define popen _popen
 #define pclose _pclose
 #endif
 
-#include "Bliss.h"
 
 namespace Bliss {
     namespace StandardLibrary {
