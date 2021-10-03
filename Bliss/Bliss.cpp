@@ -2,7 +2,8 @@
 //
 
 #include <iostream>
-#include <ctype.h>
+#include <fstream> // Bliss::StandardaLibrary::File
+#include <ctype.h> // { isspace, isdigit } Bliss::Parser::detail
 #include "Bliss.h"
 
 // Shared
@@ -140,6 +141,10 @@ namespace Bliss {
 		std::swap(container, other.container);
 		//container = std::move(other.container);
 		return *this;
+	}
+
+	void BVar::swap(BVar &other) noexcept {
+		std::swap(container, other.container);
 	}
 
 	namespace detail {
@@ -315,7 +320,7 @@ namespace Bliss {
 					const BVar &cond = Eval(x.Index(1), env);
 					const BVar &condeq = x.Index(2);
 					const BVar &alt = (x.Length() > 3 ? x.Index(3) : Nil);
-					x.assign(cond == False ? alt : condeq);
+					x.assign((cond == False || cond == Nil) ? alt : condeq);
 					// Tail recurse
 					if (Debug) std::cerr << DepthStr() << "Eval(" << x << ") => " << x << debug_endstr;
 					EvalDepth--;
@@ -525,9 +530,66 @@ namespace Bliss {
 				return Nil;
 			}
 		}
+
+#define RUNTIME_CHECK(Args,Check) do { /* TODO */ } while(0)
+
+		namespace File {
+			namespace detail {
+				const char *search_paths[] = {
+					"",
+					"./",
+					"./lisp/",
+					"./bliss_modules/",
+					0
+				};
+
+				bool exists(const std::string &file) {
+					std::ifstream fs(file);
+					return fs.good();
+				}
+
+				std::string path(const std::string &spec) {
+					for (auto it = &detail::search_paths[0]; *it != nullptr; ++it) {
+						std::string path = *it;
+						std::string full = path + spec;
+						if (exists(full))
+							return full;
+					}
+					return spec;
+				}
+			}
+
+			// (file:exists File) -> bool()
+			// No search paths used.
+			BVar Exists(const BListType &args) {
+				RUNTIME_CHECK(args, runtime_check::has_atleast_one_argument);
+				return detail::exists(args[0].StringValue());
+			}
+
+			// (file:path File) -> Path
+			// and Path is subpath of search_paths().
+			BVar Path(const BListType &args) {
+				RUNTIME_CHECK(args, runtime_check::has_atleast_one_argument);
+				return detail::path(args[0].StringValue());
+			}
+
+			BVar Read(const BListType &args) {
+				RUNTIME_CHECK(args, runtime_check::has_atleast_one_argument);
+				const std::string spec = detail::path(args[0].StringValue());
+				std::ifstream fs(spec);
+				if (!fs.good())
+					throw BRuntimeException("Failed to open file: " + spec);
+				std::stringstream buffer;
+				buffer << fs.rdbuf();
+				return buffer.str();
+			}
+		}
 	}
 
 	void AddStandardLibrary(BEnvPtr env) {
+		env->TryInsert(False.AtomValue(), False);
+		env->TryInsert(True.AtomValue(), True);
+		env->TryInsert(Nil.AtomValue(), Nil);
 		env->TryInsert(AtomLibrary.declare("print"), BVar(StandardLibrary::Print));
 		env->TryInsert(AtomLibrary.declare("+"), BVar(StandardLibrary::Plus));
 		env->TryInsert(AtomLibrary.declare("-"), BVar(StandardLibrary::Minus));
@@ -540,6 +602,9 @@ namespace Bliss {
 		env->TryInsert(AtomLibrary.declare("dict"), BVar(StandardLibrary::Dict::New));
 		env->TryInsert(AtomLibrary.declare("dict:set!"), BVar(StandardLibrary::Dict::Set));
 		env->TryInsert(AtomLibrary.declare("dict:get"), BVar(StandardLibrary::Dict::Get));
+		env->TryInsert(AtomLibrary.declare("file:exists"), BVar(StandardLibrary::File::Exists));
+		env->TryInsert(AtomLibrary.declare("file:path"), BVar(StandardLibrary::File::Path));
+		env->TryInsert(AtomLibrary.declare("file:read"), BVar(StandardLibrary::File::Read));
 	}
 }
 

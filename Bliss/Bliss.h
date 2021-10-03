@@ -188,6 +188,7 @@ namespace Bliss {
 		bool operator!= (const BVar &rhs) const;
 		BVar &operator=(const BVar &&other) noexcept;
 		BVar &operator=(BVar &other) noexcept;
+		void swap(BVar &other) noexcept;
 	};
 
 	std::ostream &operator<<(std::ostream &os, const BVar &v);
